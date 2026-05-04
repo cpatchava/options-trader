@@ -66,61 +66,64 @@ def _find_target_put(ticker: str, S: float, today: date) -> dict | None:
         if not exps:
             return None
 
-        # Pick the expiry closest to 30 DTE within the window
-        target_exp = None
-        best_gap = 999
+        # Collect all expiries in the DTE window, sorted by closeness to 30 DTE
+        valid_exps = []
         for exp_str in exps:
             exp = date.fromisoformat(exp_str)
             dte = (exp - today).days
             if DTE_MIN <= dte <= DTE_MAX:
-                gap = abs(dte - 30)
-                if gap < best_gap:
-                    best_gap = gap
-                    target_exp = (exp_str, exp, dte)
+                valid_exps.append((abs(dte - 30), exp_str, exp, dte))
+        valid_exps.sort()
 
-        if target_exp is None:
+        if not valid_exps:
             return None
 
-        exp_str, exp_date, dte = target_exp
-        T = dte / 365.0
-
-        chain = t.option_chain(exp_str)
-        puts = chain.puts
-        if puts.empty:
-            return None
-
+        # Try each expiry in order until one yields a valid candidate
+        # (weekly expiries often have no liquid contracts despite being in the DTE window)
         mid_delta = (DELTA_LOW + DELTA_HIGH) / 2
         candidates = []
+        exp_str = exp_date = dte = T = None
 
-        for _, row in puts.iterrows():
-            iv_est = float(row.get('impliedVolatility', 0) or 0)
-            bid    = float(row.get('bid', 0) or 0)
-            ask    = float(row.get('ask', 0) or 0)
-            oi     = int(row.get('openInterest', 0) or 0)
-
-            if iv_est <= 0 or bid <= 0:
-                continue
-            if oi < MIN_OPTIONS_OI:
+        for _, exp_str, exp_date, dte in valid_exps:
+            T = dte / 365.0
+            chain = t.option_chain(exp_str)
+            puts = chain.puts
+            if puts.empty:
                 continue
 
-            # Spread filter
-            mid = (bid + ask) / 2 if ask > 0 else bid
-            if mid > 0 and (ask - bid) / mid > MAX_SPREAD_PCT:
-                continue
+            candidates = []
+            for _, row in puts.iterrows():
+                iv_est = float(row.get('impliedVolatility', 0) or 0)
+                bid    = float(row.get('bid', 0) or 0)
+                ask    = float(row.get('ask', 0) or 0)
+                oi     = int(row.get('openInterest', 0) or 0)
 
-            d_abs = abs(bsm.delta(S, float(row['strike']), T, RISK_FREE_RATE, iv_est, 'put'))
-            if DELTA_LOW <= d_abs <= DELTA_HIGH:
-                candidates.append({
-                    'strike':     float(row['strike']),
-                    'bid':        bid,
-                    'ask':        ask,
-                    'delta':      d_abs,
-                    'iv':         iv_est,
-                    'expiry':     exp_date,
-                    'expiry_str': exp_date.strftime('%b %d'),
-                    'dte':        dte,
-                    'oi':         oi,
-                })
+                if iv_est <= 0 or bid <= 0:
+                    continue
+                if oi < MIN_OPTIONS_OI:
+                    continue
+
+                # Spread filter
+                mid = (bid + ask) / 2 if ask > 0 else bid
+                if mid > 0 and (ask - bid) / mid > MAX_SPREAD_PCT:
+                    continue
+
+                d_abs = abs(bsm.delta(S, float(row['strike']), T, RISK_FREE_RATE, iv_est, 'put'))
+                if DELTA_LOW <= d_abs <= DELTA_HIGH:
+                    candidates.append({
+                        'strike':     float(row['strike']),
+                        'bid':        bid,
+                        'ask':        ask,
+                        'delta':      d_abs,
+                        'iv':         iv_est,
+                        'expiry':     exp_date,
+                        'expiry_str': exp_date.strftime('%b %d'),
+                        'dte':        dte,
+                        'oi':         oi,
+                    })
+
+            if candidates:
+                break  # found valid candidates on this expiry — stop trying others
 
         if not candidates:
             return None
