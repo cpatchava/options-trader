@@ -176,7 +176,7 @@ def build_report() -> tuple[str, str]:
 </body>
 </html>"""
 
-    return subject, html
+    return subject, html, candidates
 
 
 def _build_actions(open_pos_df, candidates, share_pos_df=None) -> list:
@@ -279,12 +279,11 @@ def _build_actions(open_pos_df, candidates, share_pos_df=None) -> list:
 
 # ── Email sender ───────────────────────────────────────────────────────────────
 
-def send_email(subject: str, html_body: str):
+def send_email(subject: str, html_body: str, candidates: list | None = None):
     if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
         print("  [EMAIL] No credentials found in .env — printing report instead.\n")
         print(f"SUBJECT: {subject}\n")
-        # Print plain-text summary instead
-        _print_plain_summary()
+        _print_plain_summary(candidates)
         return
 
     msg = MIMEMultipart('alternative')
@@ -300,10 +299,11 @@ def send_email(subject: str, html_body: str):
     print(f"  Report emailed to {EMAIL_RECIPIENT}")
 
 
-def _print_plain_summary():
+def _print_plain_summary(candidates: list | None = None):
     """Fallback plain-text print when no email credentials."""
     today = date.today()
-    candidates = screen()
+    if candidates is None:
+        candidates = screen()
     df = load_trades()
     s = portfolio_summary(STARTING_CAPITAL)
     target = STARTING_CAPITAL * TARGET_MONTHLY_RETURN
@@ -325,6 +325,6 @@ def _print_plain_summary():
 
 if __name__ == '__main__':
     print(f"Generating report for {date.today()}...")
-    subject, html = build_report()
-    send_email(subject, html)
+    subject, html, candidates = build_report()
+    send_email(subject, html, candidates)
     print("Done.")
