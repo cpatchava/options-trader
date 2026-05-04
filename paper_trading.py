@@ -17,7 +17,9 @@ Daily P&L log stored in: data/paper_log.csv
 import warnings
 warnings.filterwarnings('ignore')
 
-import sys
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -26,7 +28,7 @@ import yfinance as yf
 
 from config import (
     STARTING_CAPITAL, POSITION_SIZE_PCT, MAX_POSITIONS,
-    STOP_LOSS_PCT,
+    STOP_LOSS_PCT, EMAIL_RECIPIENT, GMAIL_ADDRESS, GMAIL_APP_PASSWORD,
 )
 from screener import screen
 
@@ -320,6 +322,71 @@ def print_summary(df: pd.DataFrame, events: list[str], portfolio_value: float, t
     print(f"\n{'='*65}\n")
 
 
+# ── Email summary ─────────────────────────────────────────────────────────────
+
+def _send_email_summary(df: pd.DataFrame, events: list[str],
+                        portfolio_value: float, today: date):
+    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
+        return
+
+    open_puts   = df[(df['status'] == 'open') & (df['option_type'] == 'put')]
+    open_shares = df[(df['status'] == 'open') & (df['option_type'] == 'shares')]
+    closed      = df[df['status'] == 'closed']
+    realized    = closed['pnl'].sum() if not closed.empty else 0
+    month_start = pd.Timestamp(today.replace(day=1))
+    mtd = df[(df['status'] == 'closed') &
+             (pd.to_datetime(df['close_date']) >= month_start)]['pnl'].sum()
+    if pd.isna(mtd): mtd = 0
+    win = (closed['pnl'] > 0).sum() if not closed.empty else 0
+    total = len(closed)
+
+    events_html = ''.join(f'<li>{e}</li>' for e in events) if events else '<li>No events today</li>'
+
+    puts_rows = ''.join(
+        f"<tr><td>{r['ticker']}</td><td>{int(r['contracts'])}x ${float(r['strike']):.0f}</td>"
+        f"<td>{str(r['expiry'])[:10]}</td>"
+        f"<td>{(date.fromisoformat(str(r['expiry'])[:10]) - today).days}d</td>"
+        f"<td>${float(r['open_premium']):.2f}</td></tr>"
+        for _, r in open_puts.iterrows()
+    )
+
+    subject = (f"Paper Trading — {today.strftime('%a %b %d')} | "
+               f"MTD ${mtd:+,.0f} | All-time ${realized:+,.0f}")
+
+    html = f"""
+    <html><body style="font-family:monospace;font-size:14px;max-width:600px;margin:auto">
+    <h2 style="border-bottom:2px solid #333">Paper Trading — {today.strftime('%A %B %d, %Y')}</h2>
+
+    <h3>Today's Events</h3>
+    <ul>{events_html}</ul>
+
+    <h3>Portfolio</h3>
+    <table><tr><td>Estimated value</td><td><b>${portfolio_value:,.0f}</b></td></tr>
+    <tr><td>MTD realized P&L</td><td><b>${mtd:+,.0f}</b></td></tr>
+    <tr><td>All-time P&L</td><td><b>${realized:+,.0f}</b></td></tr>
+    <tr><td>Win rate</td><td><b>{win}/{total}</b></td></tr></table>
+
+    <h3>Open Puts ({len(open_puts)})</h3>
+    <table border="1" cellpadding="4" style="border-collapse:collapse">
+    <tr><th>Ticker</th><th>Position</th><th>Expiry</th><th>DTE</th><th>Premium</th></tr>
+    {puts_rows if puts_rows else '<tr><td colspan="5">None</td></tr>'}
+    </table>
+    </body></html>
+    """
+
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = subject
+    msg['From']    = GMAIL_ADDRESS
+    msg['To']      = EMAIL_RECIPIENT
+    msg.attach(MIMEText(html, 'html'))
+
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+        smtp.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+        smtp.sendmail(GMAIL_ADDRESS, EMAIL_RECIPIENT, msg.as_string())
+
+    print(f"  Summary emailed to {EMAIL_RECIPIENT}")
+
+
 # ── Main daily run ────────────────────────────────────────────────────────────
 
 def daily_run():
@@ -370,9 +437,10 @@ def daily_run():
     log = pd.concat([log, pd.DataFrame([log_row])], ignore_index=True)
     _save_log(log)
 
-    # Step 5: print summary
+    # Step 5: print summary and email
     portfolio_value = _portfolio_value(df, STARTING_CAPITAL)
     print_summary(df, all_events, portfolio_value, today)
+    _send_email_summary(df, all_events, portfolio_value, today)
 
 
 if __name__ == '__main__':

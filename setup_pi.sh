@@ -22,7 +22,7 @@ echo "      Done. $(timedatectl | grep 'Time zone')"
 # ── 2. System packages ────────────────────────────────────────────────────────
 echo "[2/5] Installing system packages..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq python3-pip python3-venv libatlas-base-dev
+sudo apt-get install -y -qq python3-pip python3-venv libopenblas-dev
 echo "      Done."
 
 # ── 3. Python dependencies ────────────────────────────────────────────────────
