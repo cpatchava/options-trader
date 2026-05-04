@@ -39,7 +39,10 @@ def _load() -> pd.DataFrame:
     if IV_HISTORY_PATH.exists():
         df = pd.read_csv(IV_HISTORY_PATH, parse_dates=['date'])
     else:
-        df = pd.DataFrame(columns=['date', 'ticker', 'iv', 'source'])
+        df = pd.DataFrame({'date': pd.Series(dtype='datetime64[ns]'),
+                           'ticker': pd.Series(dtype='str'),
+                           'iv': pd.Series(dtype='float64'),
+                           'source': pd.Series(dtype='str')})
     _cache = df
     return df
 
