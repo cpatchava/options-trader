@@ -43,12 +43,18 @@ echo "[5/5] Installing crontab (Mon-Fri, market hours ET)..."
 CRON_REPORT="0 8 * * 1-5 $PROJECT_DIR/run_report.sh"
 CRON_PAPER="30 16 * * 1-5 $PROJECT_DIR/run_paper_trading.sh"
 
-# Point shell scripts to the venv python
+# Point shell scripts to the venv python and correct project directory
 sed -i "s|/usr/local/Cellar/python@3.13/3.13.7/bin/python3.13|$PYTHON|g" \
     "$PROJECT_DIR/run_report.sh" \
     "$PROJECT_DIR/run_paper_trading.sh"
-# Also catch if already patched to system python3
 sed -i "s|/usr/bin/python3 |$PYTHON |g" \
+    "$PROJECT_DIR/run_report.sh" \
+    "$PROJECT_DIR/run_paper_trading.sh"
+# Replace any hardcoded project paths (e.g. Mac paths) with this machine's path
+sed -i "s|cd .*options-trader|cd $PROJECT_DIR|g" \
+    "$PROJECT_DIR/run_report.sh" \
+    "$PROJECT_DIR/run_paper_trading.sh"
+sed -i "s|>> .*/options-trader/|>> $PROJECT_DIR/|g" \
     "$PROJECT_DIR/run_report.sh" \
     "$PROJECT_DIR/run_paper_trading.sh"
 
