@@ -1,0 +1,35 @@
+ROBUSTNESS ANALYSIS SUMMARY
+============================================================
+
+1. WALK-FORWARD TEST
+   In-sample  (2020-2022): 23.9%/yr  Sharpe 1.25
+   Out-of-sample (2023-2026): 38.9%/yr  Sharpe 2.54
+   Retention ratio: 163% → ROBUST
+
+2. STARTING-DATE SENSITIVITY
+   Start 2020: 26.2%/yr  Sharpe 1.58  Worst mo -9.7%
+   Start 2021: 24.4%/yr  Sharpe 1.44  Worst mo -9.7%
+   Start 2022: 19.4%/yr  Sharpe 1.30  Worst mo -9.7%
+   Start 2023: 28.5%/yr  Sharpe 2.20  Worst mo -4.9%
+   Range: 19.4% – 28.5%  (all positive = robust to entry timing)
+
+3. STOP-LOSS CLUSTERING
+   Total stops: 89  Isolated: 6  Clustered: 83
+   Total stop-loss P&L: $-427,678
+   Worst 30-day windows:
+     2026-02-20: 5 stops, $-53,698
+     2026-02-04: 5 stops, $-53,221
+     2026-03-02: 4 stops, $-49,913
+
+4. AFTER-TAX RETURNS (37% ordinary income)
+   Pre-tax annual return : 26.2%  Final: $434,187
+   After-tax annual return: 19.5%  Final: $307,794
+   Total tax paid (est.) : $128,643
+   SPY after-tax (15% LTCG): 13.1%/yr
+   Outperformance vs SPY after-tax: +6.4 pp/yr
+
+5. PAPER TRADING
+   Live screener is operational (daily_report.py + screener.py).
+   IV history bootstrapped from ORATS (137K readings, 87 tickers).
+   Recommendation: run paper trades for 90 days before deploying capital.
+   Log each screener recommendation daily; compare to backtest predictions.

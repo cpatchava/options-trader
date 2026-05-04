@@ -1,0 +1,22 @@
+# Credentials
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Generated outputs
+*.png
+*.pdf
+*.log
+
+# Data files (dynamic — sync separately between machines)
+data/*
+!data/.gitkeep
+
+# Large ORATS database
+*.duckdb

@@ -1,0 +1,323 @@
+"""
+Daily options report: runs screener, checks open positions, emails results.
+Scheduled via cron to run each weekday at 8 AM.
+"""
+
+import warnings
+warnings.filterwarnings('ignore')
+
+import smtplib
+import sys
+from datetime import date
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
+from config import (
+    STARTING_CAPITAL, TARGET_MONTHLY_RETURN, EMAIL_RECIPIENT,
+    GMAIL_ADDRESS, GMAIL_APP_PASSWORD, STOP_LOSS_PCT,
+)
+from screener import screen
+from portfolio import load_trades, open_positions, assigned_shares, summary as portfolio_summary
+
+
+# ── Report generation ──────────────────────────────────────────────────────────
+
+def build_report() -> tuple[str, str]:
+    """Return (subject, html_body)."""
+    today = date.today()
+    candidates = screen()
+    df = load_trades()
+    open_pos = open_positions(df)
+    s = portfolio_summary(STARTING_CAPITAL)
+
+    target_monthly = STARTING_CAPITAL * TARGET_MONTHLY_RETURN
+    collected = s['mtd_collected']
+    mtd_pct = (collected / target_monthly * 100) if target_monthly else 0
+
+    subject = f"Options Report — {today.strftime('%a %b %d, %Y')} | MTD ${collected:,.0f} / ${target_monthly:,.0f}"
+
+    # ── Action items ───────────────────────────────────────────────────────
+    share_pos = assigned_shares(df)
+    actions = _build_actions(open_pos, candidates, share_pos)
+
+    html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body        {{ font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
+                 font-size: 14px; color: #1a1a1a; max-width: 780px; margin: auto; padding: 20px; }}
+  h2          {{ color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 6px; }}
+  h3          {{ color: #34495e; margin-top: 28px; }}
+  table       {{ border-collapse: collapse; width: 100%; margin: 12px 0; }}
+  th          {{ background: #2c3e50; color: white; padding: 8px 12px; text-align: left; font-size: 13px; }}
+  td          {{ padding: 7px 12px; border-bottom: 1px solid #ecf0f1; }}
+  tr:hover    {{ background: #f8f9fa; }}
+  .metric     {{ display: inline-block; background: #ecf0f1; border-radius: 6px;
+                 padding: 10px 18px; margin: 6px; text-align: center; min-width: 120px; }}
+  .metric-val {{ font-size: 20px; font-weight: bold; color: #2980b9; }}
+  .metric-lbl {{ font-size: 11px; color: #7f8c8d; margin-top: 4px; }}
+  .green      {{ color: #27ae60; font-weight: bold; }}
+  .red        {{ color: #e74c3c; font-weight: bold; }}
+  .orange     {{ color: #e67e22; font-weight: bold; }}
+  .action     {{ background: #fef9e7; border-left: 4px solid #f39c12;
+                 padding: 10px 14px; margin: 8px 0; border-radius: 4px; }}
+  .action-new {{ background: #eafaf1; border-left-color: #27ae60; }}
+  .action-close{{ background: #fdedec; border-left-color: #e74c3c; }}
+  footer      {{ margin-top: 40px; font-size: 11px; color: #aaa; border-top: 1px solid #eee; padding-top: 10px; }}
+</style>
+</head>
+<body>
+
+<h2>Options Daily Report &nbsp;·&nbsp; {today.strftime('%B %d, %Y')}</h2>
+
+<div>
+  <div class="metric">
+    <div class="metric-val">${collected:,.0f}</div>
+    <div class="metric-lbl">MTD Premium Collected</div>
+  </div>
+  <div class="metric">
+    <div class="metric-val">${target_monthly:,.0f}</div>
+    <div class="metric-lbl">Monthly Target (1%)</div>
+  </div>
+  <div class="metric">
+    <div class="metric-val {'green' if mtd_pct >= 100 else 'orange' if mtd_pct >= 50 else 'red'}">{mtd_pct:.0f}%</div>
+    <div class="metric-lbl">Target Progress</div>
+  </div>
+  <div class="metric">
+    <div class="metric-val">{s['open_positions']}</div>
+    <div class="metric-lbl">Open Positions</div>
+  </div>
+  <div class="metric">
+    <div class="metric-val">{s['win_rate_pct']}%</div>
+    <div class="metric-lbl">Win Rate (all-time)</div>
+  </div>
+</div>
+
+<h3>ACTION ITEMS</h3>
+"""
+
+    if actions:
+        for i, a in enumerate(actions, 1):
+            css = 'action-close' if a['type'] == 'close' else 'action-new' if a['type'] == 'open' else 'action'
+            html += f'<div class="action {css}"><strong>{i}. [{a["type"].upper()}]</strong> {a["description"]}</div>\n'
+    else:
+        html += '<p><em>No urgent actions today. Monitor open positions.</em></p>'
+
+    # ── Open positions ─────────────────────────────────────────────────────
+    html += '<h3>OPEN POSITIONS</h3>'
+    if not open_pos.empty:
+        from portfolio import COMMISSION
+        html += """<table>
+<tr><th>Ticker</th><th>Type</th><th>Strike</th><th>Expiry</th>
+    <th>Premium</th><th>Contracts</th><th>Pred. P&L</th><th>Opened</th></tr>"""
+        for _, row in open_pos.iterrows():
+            pred = (row['open_premium'] * 100 * row['contracts']
+                    - COMMISSION * row['contracts'] * 2)
+            exp_str = row['expiry'].strftime('%Y-%m-%d') if hasattr(row['expiry'], 'strftime') else str(row['expiry'])
+            html += (f"<tr><td><b>{row['ticker']}</b></td>"
+                     f"<td>{str(row['option_type']).upper()}</td>"
+                     f"<td>${row['strike']:.2f}</td>"
+                     f"<td>{exp_str}</td>"
+                     f"<td>${row['open_premium']:.2f}</td>"
+                     f"<td>{row['contracts']}</td>"
+                     f"<td class='green'>${pred:.0f}</td>"
+                     f"<td>{str(row['open_date'])[:10]}</td></tr>\n")
+        html += '</table>'
+    else:
+        html += '<p><em>No open positions.</em></p>'
+
+    # ── New opportunities ──────────────────────────────────────────────────
+    html += '<h3>NEW OPPORTUNITIES (Screener — today\'s best candidates)</h3>'
+    if candidates:
+        html += """<table>
+<tr><th>Rank</th><th>Ticker</th><th>Price</th><th>IVR</th><th>IV</th>
+    <th>Strike</th><th>Bid</th><th>Delta</th><th>Yield</th><th>Ann Yld</th>
+    <th>Expiry</th><th>DTE</th><th>Earnings</th></tr>"""
+        for i, r in enumerate(candidates, 1):
+            ivr_color = 'green' if r['iv_rank'] >= 50 else 'orange' if r['iv_rank'] >= 30 else 'red'
+            earn_str  = f"{r['earnings_in']}d" if r.get('earnings_in') is not None else '—'
+            html += (f"<tr>"
+                     f"<td>{i}</td>"
+                     f"<td><b>{r['ticker']}</b></td>"
+                     f"<td>${r['price']:.2f}</td>"
+                     f"<td class='{ivr_color}'>{r['iv_rank']:.0f}</td>"
+                     f"<td>{r['iv_pct']}%</td>"
+                     f"<td>${r['put_strike']}</td>"
+                     f"<td>${r['put_bid']}</td>"
+                     f"<td>Δ{r['put_delta']}</td>"
+                     f"<td>{r['put_yield_pct']}%</td>"
+                     f"<td>{r['put_ann_yield']}%</td>"
+                     f"<td>{r['expiry']}</td>"
+                     f"<td>{r['dte']}</td>"
+                     f"<td>{earn_str}</td>"
+                     f"</tr>\n")
+        html += '</table>'
+
+    # ── Prediction accuracy ────────────────────────────────────────────────
+    if s['closed_trades'] > 0:
+        html += f"""<h3>ALL-TIME P&amp;L</h3>
+<p>Total premium collected: <b>${s['total_collected']:,.0f}</b> &nbsp;·&nbsp;
+   Closed trades: <b>{s['closed_trades']}</b> &nbsp;·&nbsp;
+   Win rate: <b>{s['win_rate_pct']}%</b></p>"""
+
+    html += f"""
+<footer>
+  Generated {today.isoformat()} · Wheel Strategy · Target $100K @ 1%/mo · Data via yfinance (15-min delay) · Not financial advice
+</footer>
+</body>
+</html>"""
+
+    return subject, html
+
+
+def _build_actions(open_pos_df, candidates, share_pos_df=None) -> list:
+    import yfinance as yf
+    actions = []
+    today = date.today()
+
+    # ── Stop-loss alerts for held shares ──────────────────────────────────
+    if share_pos_df is not None and not share_pos_df.empty:
+        for _, row in share_pos_df.iterrows():
+            try:
+                cost_basis = float(row['strike'])
+                stop_level = round(cost_basis * (1 - STOP_LOSS_PCT), 2)
+                ticker     = row['ticker']
+                cur_px     = float(yf.Ticker(ticker).fast_info.last_price)
+                pct_from_stop = (cur_px - stop_level) / cost_basis * 100
+
+                if cur_px <= stop_level:
+                    actions.append({
+                        'type': 'close',
+                        'description': (
+                            f"🚨 <b>STOP TRIGGERED — {ticker}</b>: "
+                            f"current ${cur_px:.2f} ≤ stop ${stop_level:.2f} "
+                            f"(cost basis ${cost_basis:.2f}, −{STOP_LOSS_PCT*100:.0f}%). "
+                            f"<b>SELL {int(row['contracts'])*100} shares on Schwab NOW. "
+                            f"Log close in trades.csv.</b>"
+                        ),
+                    })
+                elif pct_from_stop < 5:
+                    actions.append({
+                        'type': 'monitor',
+                        'description': (
+                            f"⚠️ <b>Stop warning — {ticker}</b>: "
+                            f"current ${cur_px:.2f}, stop at ${stop_level:.2f} "
+                            f"(only {pct_from_stop:.1f}% above trigger). "
+                            f"Confirm GTC stop order is live on Schwab."
+                        ),
+                    })
+                else:
+                    # Normal: show recovery progress
+                    pct_to_basis = (cur_px / cost_basis - 1) * 100
+                    actions.append({
+                        'type': 'monitor',
+                        'description': (
+                            f"📊 Holding {ticker} shares: "
+                            f"current ${cur_px:.2f} vs cost basis ${cost_basis:.2f} "
+                            f"({pct_to_basis:+.1f}%). "
+                            f"Stop at ${stop_level:.2f}. "
+                            f"{'<b>Write covered call — stock recovered to basis.</b>' if cur_px >= cost_basis else 'Waiting for recovery before writing covered call.'}"
+                        ),
+                    })
+            except Exception:
+                pass
+
+    # ── Expiry alerts for open options ────────────────────────────────────
+    if not open_pos_df.empty:
+        opts = open_pos_df[open_pos_df['option_type'].str.lower().isin(['put', 'call'])]
+        for _, row in opts.iterrows():
+            try:
+                exp = row['expiry'].date() if hasattr(row['expiry'], 'date') else date.fromisoformat(str(row['expiry'])[:10])
+                dte = (exp - today).days
+                exp_str = exp.strftime('%Y-%m-%d')
+                if dte <= 2:
+                    actions.append({
+                        'type': 'close',
+                        'description': (
+                            f"<b>ACTION REQUIRED</b> — {row['ticker']} "
+                            f"{str(row['option_type']).upper()} ${row['strike']} expires {exp_str} ({dte}d). "
+                            f"Check if assigned or expired. Update trades.csv."
+                        ),
+                    })
+                elif dte <= 7:
+                    actions.append({
+                        'type': 'monitor',
+                        'description': (
+                            f"{row['ticker']} {str(row['option_type']).upper()} ${row['strike']} "
+                            f"expires {exp_str} ({dte} DTE) — verify status on Schwab."
+                        ),
+                    })
+            except Exception:
+                pass
+
+    # ── New opening opportunities ─────────────────────────────────────────
+    open_tickers = set(open_pos_df['ticker'].tolist()) if not open_pos_df.empty else set()
+    for r in candidates[:3]:
+        if r['ticker'] not in open_tickers:
+            actions.append({
+                'type': 'open',
+                'description': (
+                    f"<b>{r['ticker']}</b> — Sell {r['expiry']} "
+                    f"<b>${r['put_strike']} Put</b> @ ${r['put_bid']} bid "
+                    f"({r['put_yield_pct']}% / {r['put_ann_yield']}% ann, "
+                    f"Δ{r['put_delta']}, IVR {r['iv_rank']:.0f}). "
+                    f"Verify quote on Schwab. Add row to trades.csv with your fill."
+                ),
+            })
+
+    return actions
+
+
+# ── Email sender ───────────────────────────────────────────────────────────────
+
+def send_email(subject: str, html_body: str):
+    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
+        print("  [EMAIL] No credentials found in .env — printing report instead.\n")
+        print(f"SUBJECT: {subject}\n")
+        # Print plain-text summary instead
+        _print_plain_summary()
+        return
+
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = subject
+    msg['From']    = GMAIL_ADDRESS
+    msg['To']      = EMAIL_RECIPIENT
+    msg.attach(MIMEText(html_body, 'html'))
+
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+        smtp.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+        smtp.sendmail(GMAIL_ADDRESS, EMAIL_RECIPIENT, msg.as_string())
+
+    print(f"  Report emailed to {EMAIL_RECIPIENT}")
+
+
+def _print_plain_summary():
+    """Fallback plain-text print when no email credentials."""
+    today = date.today()
+    candidates = screen()
+    df = load_trades()
+    s = portfolio_summary(STARTING_CAPITAL)
+    target = STARTING_CAPITAL * TARGET_MONTHLY_RETURN
+
+    print("=" * 60)
+    print(f"OPTIONS REPORT — {today.strftime('%a %b %d, %Y')}")
+    print("=" * 60)
+    print(f"  MTD Collected : ${s['mtd_collected']:,.0f} / ${target:,.0f} target")
+    print(f"  Open Positions: {s['open_positions']}")
+    print(f"  Win Rate      : {s['win_rate_pct']}%")
+    print("\nTOP OPPORTUNITIES:")
+    for i, r in enumerate(candidates[:5], 1):
+        print(f"  {i}. {r['ticker']:6} IVR={r['iv_rank']:.0f}  IV={r['iv_pct']}%  "
+              f"${r['put_strike']} Put @ ${r['put_bid']} Δ{r['put_delta']} ({r['put_yield_pct']}%)  "
+              f"Ann {r['put_ann_yield']}%/yr  Exp {r['expiry']} ({r['dte']}d)")
+
+
+# ── Entry point ────────────────────────────────────────────────────────────────
+
+if __name__ == '__main__':
+    print(f"Generating report for {date.today()}...")
+    subject, html = build_report()
+    send_email(subject, html)
+    print("Done.")
