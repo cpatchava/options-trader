@@ -322,10 +322,84 @@ def print_summary(df: pd.DataFrame, events: list[str], portfolio_value: float, t
     print(f"\n{'='*65}\n")
 
 
+# ── Live position pricing table ───────────────────────────────────────────────
+
+def build_live_positions_html(open_puts: pd.DataFrame, today: date) -> str:
+    """Return an HTML table of open puts with live stock price, current bid,
+    % decayed, and distance to the 50% profit-take trigger."""
+    if open_puts.empty:
+        return '<p><em>No open put positions.</em></p>'
+
+    rows = ''
+    for _, row in open_puts.iterrows():
+        ticker     = row['ticker']
+        strike     = float(row['strike'])
+        open_prem  = float(row['open_premium'])
+        expiry_str = str(row['expiry'])[:10]
+        n          = int(row['contracts'])
+        dte        = (date.fromisoformat(expiry_str) - today).days
+        take_target = round(open_prem * PROFIT_TAKE_PCT, 2)
+
+        cur_stock = _current_stock_price(ticker)
+        cur_bid   = _current_option_bid(ticker, expiry_str, strike, 'put')
+
+        stock_str = f'${cur_stock:.2f}' if cur_stock else 'N/A'
+        otm_str   = (f'{(cur_stock - strike) / cur_stock * 100:+.1f}%'
+                     if cur_stock else '—')
+
+        if cur_bid is not None:
+            decayed_pct = (open_prem - cur_bid) / open_prem * 100
+            if decayed_pct >= 50:
+                decay_color = '#27ae60'
+                decay_label = f'{decayed_pct:.0f}% ✓ TAKE'
+            elif decayed_pct >= 30:
+                decay_color = '#e67e22'
+                decay_label = f'{decayed_pct:.0f}%'
+            else:
+                decay_color = '#555'
+                decay_label = f'{decayed_pct:.0f}%'
+            distance = cur_bid - take_target
+            dist_str  = ('→ TAKE NOW' if distance <= 0
+                         else f'${distance:.2f} away')
+            bid_str   = f'${cur_bid:.2f}'
+        else:
+            decay_color = '#999'
+            decay_label = 'N/A'
+            bid_str     = 'N/A'
+            dist_str    = '—'
+
+        rows += (
+            f'<tr>'
+            f'<td><b>{ticker}</b></td>'
+            f'<td>{n}x ${strike:.0f}</td>'
+            f'<td>{stock_str} ({otm_str})</td>'
+            f'<td>${open_prem:.2f}</td>'
+            f'<td>{bid_str}</td>'
+            f'<td style="color:{decay_color};font-weight:bold">{decay_label}</td>'
+            f'<td>${take_target:.2f}</td>'
+            f'<td>{dist_str}</td>'
+            f'<td>{dte}d</td>'
+            f'</tr>\n'
+        )
+
+    return (
+        '<table border="1" cellpadding="5" '
+        'style="border-collapse:collapse;width:100%;font-size:13px">'
+        '<tr style="background:#2c3e50;color:white">'
+        '<th>Ticker</th><th>Position</th><th>Stock (vs strike)</th>'
+        '<th>Opened @</th><th>Current Bid</th><th>Decayed</th>'
+        '<th>50% Take @</th><th>Distance</th><th>DTE</th>'
+        '</tr>'
+        f'{rows}'
+        '</table>'
+    )
+
+
 # ── Email summary ─────────────────────────────────────────────────────────────
 
 def _send_email_summary(df: pd.DataFrame, events: list[str],
-                        portfolio_value: float, today: date):
+                        portfolio_value: float, today: date,
+                        candidates: list | None = None):
     if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
         return
 
@@ -342,20 +416,34 @@ def _send_email_summary(df: pd.DataFrame, events: list[str],
 
     events_html = ''.join(f'<li>{e}</li>' for e in events) if events else '<li>No events today</li>'
 
-    puts_rows = ''.join(
-        f"<tr><td>{r['ticker']}</td><td>{int(r['contracts'])}x ${float(r['strike']):.0f}</td>"
-        f"<td>{str(r['expiry'])[:10]}</td>"
-        f"<td>{(date.fromisoformat(str(r['expiry'])[:10]) - today).days}d</td>"
-        f"<td>${float(r['open_premium']):.2f}</td></tr>"
-        for _, r in open_puts.iterrows()
-    )
-
     subject = (f"Paper Trading — {today.strftime('%a %b %d')} | "
                f"MTD ${mtd:+,.0f} | All-time ${realized:+,.0f}")
 
+    live_table = build_live_positions_html(open_puts, today)
+
+    cand_rows = ''
+    if candidates:
+        for r in candidates:
+            cand_rows += (
+                f'<tr><td><b>{r["ticker"]}</b></td>'
+                f'<td>${r["price"]:.2f}</td>'
+                f'<td>{r["iv_rank"]:.0f}</td>'
+                f'<td>${r["put_strike"]} @ ${r["put_bid"]}</td>'
+                f'<td>Δ{r["put_delta"]}</td>'
+                f'<td>{r["put_ann_yield"]}%/yr</td>'
+                f'<td>{r["dte"]}d</td></tr>\n'
+            )
+    cand_html = (
+        '<table border="1" cellpadding="5" style="border-collapse:collapse;font-size:13px">'
+        '<tr style="background:#2c3e50;color:white">'
+        '<th>Ticker</th><th>Price</th><th>IVR</th><th>Strike @ Bid</th>'
+        '<th>Delta</th><th>Ann Yield</th><th>DTE</th></tr>'
+        f'{cand_rows}</table>'
+    ) if cand_rows else '<p><em>No candidates above threshold today.</em></p>'
+
     html = f"""
-    <html><body style="font-family:monospace;font-size:14px;max-width:600px;margin:auto">
-    <h2 style="border-bottom:2px solid #333">Paper Trading — {today.strftime('%A %B %d, %Y')}</h2>
+    <html><body style="font-family:-apple-system,Arial,sans-serif;font-size:14px;max-width:780px;margin:auto;padding:20px">
+    <h2 style="border-bottom:2px solid #2c3e50">Paper Trading — {today.strftime('%A %B %d, %Y')}</h2>
 
     <h3>Today's Events</h3>
     <ul>{events_html}</ul>
@@ -366,11 +454,11 @@ def _send_email_summary(df: pd.DataFrame, events: list[str],
     <tr><td>All-time P&L</td><td><b>${realized:+,.0f}</b></td></tr>
     <tr><td>Win rate</td><td><b>{win}/{total}</b></td></tr></table>
 
-    <h3>Open Puts ({len(open_puts)})</h3>
-    <table border="1" cellpadding="4" style="border-collapse:collapse">
-    <tr><th>Ticker</th><th>Position</th><th>Expiry</th><th>DTE</th><th>Premium</th></tr>
-    {puts_rows if puts_rows else '<tr><td colspan="5">None</td></tr>'}
-    </table>
+    <h3>Open Positions — Live Pricing</h3>
+    {live_table}
+
+    <h3>Today's Screener Candidates</h3>
+    {cand_html}
     </body></html>
     """
 
@@ -440,7 +528,7 @@ def daily_run():
     # Step 5: print summary and email
     portfolio_value = _portfolio_value(df, STARTING_CAPITAL)
     print_summary(df, all_events, portfolio_value, today)
-    _send_email_summary(df, all_events, portfolio_value, today)
+    _send_email_summary(df, all_events, portfolio_value, today, candidates)
 
 
 if __name__ == '__main__':

@@ -18,6 +18,7 @@ from config import (
 )
 from screener import screen
 from portfolio import load_trades, open_positions, assigned_shares, summary as portfolio_summary
+from paper_trading import _load as _load_paper_trades, build_live_positions_html
 
 
 # ── Report generation ──────────────────────────────────────────────────────────
@@ -127,6 +128,12 @@ def build_report() -> tuple[str, str]:
         html += '</table>'
     else:
         html += '<p><em>No open positions.</em></p>'
+
+    # ── Live paper position check ──────────────────────────────────────────
+    paper_df   = _load_paper_trades()
+    paper_puts = paper_df[(paper_df['status'] == 'open') & (paper_df['option_type'] == 'put')]
+    html += '<h3>OPEN PAPER POSITIONS — Live Pricing</h3>'
+    html += build_live_positions_html(paper_puts, today)
 
     # ── New opportunities ──────────────────────────────────────────────────
     html += '<h3>NEW OPPORTUNITIES (Screener — today\'s best candidates)</h3>'
