@@ -6,7 +6,7 @@
 graph TD
     Pi[Raspberry Pi<br/>cron scheduler]
 
-    Pi -->|08:00 ET Mon-Fri| MR[run_report.sh]
+    Pi -->|10:00 ET Mon-Fri| MR[run_report.sh]
     Pi -->|16:30 ET Mon-Fri| PT[run_paper_trading.sh]
 
     MR --> DR[daily_report.py]
@@ -24,7 +24,7 @@ graph TD
 
     DR -->|HTML email| Gmail[Gmail SMTP :465]
     PTE -->|HTML email| Gmail
-    Gmail --> Inbox[cpatchava@gmail.com]
+    Gmail --> Inbox[Gmail Inbox]
 ```
 
 ---
