@@ -17,7 +17,7 @@ from config import (
     GMAIL_ADDRESS, GMAIL_APP_PASSWORD, STOP_LOSS_PCT,
 )
 from screener import screen
-from portfolio import load_trades, open_positions, assigned_shares, summary as portfolio_summary
+from portfolio import load_trades, open_positions, assigned_shares
 from paper_trading import _load as _load_paper_trades, build_live_positions_html
 
 
@@ -25,20 +25,32 @@ from paper_trading import _load as _load_paper_trades, build_live_positions_html
 
 def build_report() -> tuple[str, str]:
     """Return (subject, html_body)."""
+    import pandas as pd
     today = date.today()
     candidates = screen()
     df = load_trades()
     open_pos = open_positions(df)
-    s = portfolio_summary(STARTING_CAPITAL)
+    share_pos = assigned_shares(df)
+
+    # ── Paper trading metrics (source of truth) ────────────────────────────
+    paper_df     = _load_paper_trades()
+    paper_open   = paper_df[(paper_df['status'] == 'open') & (paper_df['option_type'] == 'put')]
+    paper_closed = paper_df[paper_df['status'] == 'closed']
+    month_start  = pd.Timestamp(today.replace(day=1))
+    mtd = paper_df[(paper_df['status'] == 'closed') &
+                   (pd.to_datetime(paper_df['close_date']) >= month_start)]['pnl'].sum()
+    mtd        = float(mtd) if not pd.isna(mtd) else 0
+    total_cl   = len(paper_closed)
+    wins       = int((paper_closed['pnl'] > 0).sum()) if not paper_closed.empty else 0
+    win_rate   = round(wins / total_cl * 100, 1) if total_cl > 0 else 0.0
+    open_count = len(paper_open)
 
     target_monthly = STARTING_CAPITAL * TARGET_MONTHLY_RETURN
-    collected = s['mtd_collected']
-    mtd_pct = (collected / target_monthly * 100) if target_monthly else 0
+    mtd_pct = (mtd / target_monthly * 100) if target_monthly else 0
 
-    subject = f"Options Report — {today.strftime('%a %b %d, %Y')} | MTD ${collected:,.0f} / ${target_monthly:,.0f}"
+    subject = f"Options Report — {today.strftime('%a %b %d, %Y')} | MTD ${mtd:,.0f} / ${target_monthly:,.0f}"
 
     # ── Action items ───────────────────────────────────────────────────────
-    share_pos = assigned_shares(df)
     actions = _build_actions(open_pos, candidates, share_pos)
 
     html = f"""
@@ -75,8 +87,8 @@ def build_report() -> tuple[str, str]:
 
 <div>
   <div class="metric">
-    <div class="metric-val">${collected:,.0f}</div>
-    <div class="metric-lbl">MTD Premium Collected</div>
+    <div class="metric-val">${mtd:,.0f}</div>
+    <div class="metric-lbl">MTD Realized P&L</div>
   </div>
   <div class="metric">
     <div class="metric-val">${target_monthly:,.0f}</div>
@@ -87,12 +99,12 @@ def build_report() -> tuple[str, str]:
     <div class="metric-lbl">Target Progress</div>
   </div>
   <div class="metric">
-    <div class="metric-val">{s['open_positions']}</div>
-    <div class="metric-lbl">Open Positions</div>
+    <div class="metric-val">{open_count}</div>
+    <div class="metric-lbl">Open Puts</div>
   </div>
   <div class="metric">
-    <div class="metric-val">{s['win_rate_pct']}%</div>
-    <div class="metric-lbl">Win Rate (all-time)</div>
+    <div class="metric-val">{win_rate}%</div>
+    <div class="metric-lbl">Win Rate ({wins}/{total_cl})</div>
   </div>
 </div>
 
@@ -162,12 +174,13 @@ def build_report() -> tuple[str, str]:
                      f"</tr>\n")
         html += '</table>'
 
-    # ── Prediction accuracy ────────────────────────────────────────────────
-    if s['closed_trades'] > 0:
-        html += f"""<h3>ALL-TIME P&amp;L</h3>
-<p>Total premium collected: <b>${s['total_collected']:,.0f}</b> &nbsp;·&nbsp;
-   Closed trades: <b>{s['closed_trades']}</b> &nbsp;·&nbsp;
-   Win rate: <b>{s['win_rate_pct']}%</b></p>"""
+    # ── All-time paper P&L ─────────────────────────────────────────────────
+    if total_cl > 0:
+        total_collected = float(paper_closed['pnl'].sum()) if not paper_closed.empty else 0
+        html += f"""<h3>ALL-TIME P&amp;L (Paper)</h3>
+<p>Total premium collected: <b>${total_collected:,.0f}</b> &nbsp;·&nbsp;
+   Closed trades: <b>{total_cl}</b> &nbsp;·&nbsp;
+   Win rate: <b>{win_rate}%</b></p>"""
 
     html += f"""
 <footer>
@@ -301,19 +314,28 @@ def send_email(subject: str, html_body: str, candidates: list | None = None):
 
 def _print_plain_summary(candidates: list | None = None):
     """Fallback plain-text print when no email credentials."""
+    import pandas as pd
     today = date.today()
     if candidates is None:
         candidates = screen()
-    df = load_trades()
-    s = portfolio_summary(STARTING_CAPITAL)
     target = STARTING_CAPITAL * TARGET_MONTHLY_RETURN
+    paper_df     = _load_paper_trades()
+    paper_open   = paper_df[(paper_df['status'] == 'open') & (paper_df['option_type'] == 'put')]
+    paper_closed = paper_df[paper_df['status'] == 'closed']
+    month_start  = pd.Timestamp(today.replace(day=1))
+    mtd = paper_df[(paper_df['status'] == 'closed') &
+                   (pd.to_datetime(paper_df['close_date']) >= month_start)]['pnl'].sum()
+    mtd = float(mtd) if not pd.isna(mtd) else 0
+    total_cl = len(paper_closed)
+    wins = int((paper_closed['pnl'] > 0).sum()) if not paper_closed.empty else 0
+    win_rate = round(wins / total_cl * 100, 1) if total_cl > 0 else 0.0
 
     print("=" * 60)
     print(f"OPTIONS REPORT — {today.strftime('%a %b %d, %Y')}")
     print("=" * 60)
-    print(f"  MTD Collected : ${s['mtd_collected']:,.0f} / ${target:,.0f} target")
-    print(f"  Open Positions: {s['open_positions']}")
-    print(f"  Win Rate      : {s['win_rate_pct']}%")
+    print(f"  MTD Collected : ${mtd:,.0f} / ${target:,.0f} target")
+    print(f"  Open Positions: {len(paper_open)}")
+    print(f"  Win Rate      : {win_rate}%")
     print("\nTOP OPPORTUNITIES:")
     for i, r in enumerate(candidates[:5], 1):
         print(f"  {i}. {r['ticker']:6} IVR={r['iv_rank']:.0f}  IV={r['iv_pct']}%  "
