@@ -37,13 +37,15 @@ WATCHLIST = [
 ]
 
 TICKER_SECTORS = {
-    # Technology
-    'AAPL': 'Tech',  'MSFT': 'Tech',  'GOOGL': 'Tech', 'AMZN': 'Tech',
-    'META': 'Tech',  'NVDA': 'Tech',  'AMD':   'Tech', 'INTC': 'Tech',
-    'CRM':  'Tech',  'ORCL': 'Tech',  'IBM':   'Tech', 'QCOM': 'Tech',
-    'TXN':  'Tech',  'MU':   'Tech',  'AMAT':  'Tech', 'ADSK': 'Tech',
-    'PANW': 'Tech',  'CRWD': 'Tech',  'CSCO':  'Tech', 'AVGO': 'Tech',
-    'SNOW': 'Tech',  'PLTR': 'Tech',
+    # Semiconductors
+    'NVDA': 'Semis', 'AMD':  'Semis', 'INTC': 'Semis', 'QCOM': 'Semis',
+    'TXN':  'Semis', 'MU':   'Semis', 'AMAT': 'Semis', 'AVGO': 'Semis',
+    # Software
+    'MSFT': 'Software', 'CRM':  'Software', 'ORCL': 'Software', 'ADSK': 'Software',
+    'SNOW': 'Software', 'PLTR': 'Software', 'PANW': 'Software', 'CRWD': 'Software',
+    # Big Tech
+    'AAPL': 'Big Tech', 'GOOGL': 'Big Tech', 'AMZN': 'Big Tech',
+    'META': 'Big Tech', 'IBM':   'Big Tech', 'CSCO': 'Big Tech',
     # Financials
     'JPM':  'Financials', 'BAC':  'Financials', 'WFC':  'Financials',
     'GS':   'Financials', 'MS':   'Financials', 'C':    'Financials',
