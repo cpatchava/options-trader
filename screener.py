@@ -23,7 +23,7 @@ from config import (
     DTE_MIN, DTE_MAX, HV_LOOKBACK_DAYS, MIN_IVR,
     MIN_STOCK_PRICE, MAX_STOCK_PRICE,
     MIN_OPTIONS_OI, MIN_OPTIONS_VOLUME, MAX_SPREAD_PCT,
-    EARNINGS_BUFFER_DAYS,
+    EARNINGS_BUFFER_DAYS, TICKER_SECTORS,
 )
 from utils import bsm
 from utils.data_fetcher import get_prices, historical_volatility, next_expiry
@@ -271,6 +271,7 @@ def screen(watchlist: List[str] = WATCHLIST, top_n: int = 8,
 
             results.append({
                 'ticker':       ticker,
+                'sector':       TICKER_SECTORS.get(ticker, 'Other'),
                 'price':        round(S, 2),
                 'iv_rank':      ivr,
                 'iv_pct':       iv_pct,

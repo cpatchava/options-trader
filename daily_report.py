@@ -147,19 +147,32 @@ def build_report() -> tuple[str, str]:
     html += '<h3>OPEN PAPER POSITIONS — Live Pricing</h3>'
     html += build_live_positions_html(paper_puts, today)
 
-    # ── New opportunities ──────────────────────────────────────────────────
-    html += '<h3>NEW OPPORTUNITIES (Screener — today\'s best candidates)</h3>'
+    # ── New opportunities — best per sector ───────────────────────────────
+    html += '<h3>NEW OPPORTUNITIES — Best per Sector</h3>'
     if candidates:
+        # candidates is already sorted by score desc; pick best per sector
+        seen_sectors: set = set()
+        sector_best = []
+        for r in candidates:
+            s = r.get('sector', 'Other')
+            if s not in seen_sectors:
+                seen_sectors.add(s)
+                sector_best.append(r)
+
+        paper_held = set(paper_open['ticker'].tolist()) if not paper_open.empty else set()
         html += """<table>
-<tr><th>Rank</th><th>Ticker</th><th>Price</th><th>IVR</th><th>IV</th>
+<tr><th>Sector</th><th>Ticker</th><th>Held?</th><th>Price</th><th>IVR</th><th>IV</th>
     <th>Strike</th><th>Bid</th><th>Delta</th><th>Yield</th><th>Ann Yld</th>
     <th>Expiry</th><th>DTE</th><th>Earnings</th></tr>"""
-        for i, r in enumerate(candidates, 1):
+        for r in sector_best:
             ivr_color = 'green' if r['iv_rank'] >= 50 else 'orange' if r['iv_rank'] >= 30 else 'red'
             earn_str  = f"{r['earnings_in']}d" if r.get('earnings_in') is not None else '—'
+            held      = '✓ open' if r['ticker'] in paper_held else '—'
+            held_style = 'color:#7f8c8d' if held == '—' else 'color:#e67e22;font-weight:bold'
             html += (f"<tr>"
-                     f"<td>{i}</td>"
+                     f"<td style='color:#7f8c8d;font-size:12px'>{r.get('sector','Other')}</td>"
                      f"<td><b>{r['ticker']}</b></td>"
+                     f"<td style='{held_style}'>{held}</td>"
                      f"<td>${r['price']:.2f}</td>"
                      f"<td class='{ivr_color}'>{r['iv_rank']:.0f}</td>"
                      f"<td>{r['iv_pct']}%</td>"

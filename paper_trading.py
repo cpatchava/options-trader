@@ -29,6 +29,7 @@ import yfinance as yf
 from config import (
     STARTING_CAPITAL, POSITION_SIZE_PCT, MAX_POSITIONS,
     STOP_LOSS_PCT, EMAIL_RECIPIENT, GMAIL_ADDRESS, GMAIL_APP_PASSWORD,
+    TICKER_SECTORS,
 )
 from screener import screen
 
@@ -368,9 +369,11 @@ def build_live_positions_html(open_puts: pd.DataFrame, today: date) -> str:
             bid_str     = 'N/A'
             dist_str    = '—'
 
+        sector = TICKER_SECTORS.get(ticker, 'Other')
         rows += (
             f'<tr>'
             f'<td><b>{ticker}</b></td>'
+            f'<td style="color:#7f8c8d;font-size:12px">{sector}</td>'
             f'<td>{n}x ${strike:.0f}</td>'
             f'<td>{stock_str} ({otm_str})</td>'
             f'<td>${open_prem:.2f}</td>'
@@ -386,7 +389,7 @@ def build_live_positions_html(open_puts: pd.DataFrame, today: date) -> str:
         '<table border="1" cellpadding="5" '
         'style="border-collapse:collapse;width:100%;font-size:13px">'
         '<tr style="background:#2c3e50;color:white">'
-        '<th>Ticker</th><th>Position</th><th>Stock (vs strike)</th>'
+        '<th>Ticker</th><th>Sector</th><th>Position</th><th>Stock (vs strike)</th>'
         '<th>Opened @</th><th>Current Bid</th><th>Decayed</th>'
         '<th>50% Take @</th><th>Distance</th><th>DTE</th>'
         '</tr>'

@@ -36,6 +36,46 @@ WATCHLIST = [
     'GLD', 'SLV',
 ]
 
+TICKER_SECTORS = {
+    # Technology
+    'AAPL': 'Tech',  'MSFT': 'Tech',  'GOOGL': 'Tech', 'AMZN': 'Tech',
+    'META': 'Tech',  'NVDA': 'Tech',  'AMD':   'Tech', 'INTC': 'Tech',
+    'CRM':  'Tech',  'ORCL': 'Tech',  'IBM':   'Tech', 'QCOM': 'Tech',
+    'TXN':  'Tech',  'MU':   'Tech',  'AMAT':  'Tech', 'ADSK': 'Tech',
+    'PANW': 'Tech',  'CRWD': 'Tech',  'CSCO':  'Tech', 'AVGO': 'Tech',
+    'SNOW': 'Tech',  'PLTR': 'Tech',
+    # Financials
+    'JPM':  'Financials', 'BAC':  'Financials', 'WFC':  'Financials',
+    'GS':   'Financials', 'MS':   'Financials', 'C':    'Financials',
+    'BLK':  'Financials', 'AXP':  'Financials', 'COF':  'Financials',
+    'USB':  'Financials', 'SCHW': 'Financials', 'PNC':  'Financials',
+    # Healthcare
+    'JNJ':  'Healthcare', 'UNH':  'Healthcare', 'PFE':  'Healthcare',
+    'ABBV': 'Healthcare', 'MRK':  'Healthcare', 'LLY':  'Healthcare',
+    'BMY':  'Healthcare', 'AMGN': 'Healthcare', 'GILD': 'Healthcare',
+    'CVS':  'Healthcare', 'CI':   'Healthcare', 'VRTX': 'Healthcare',
+    # Energy
+    'XOM': 'Energy', 'CVX': 'Energy', 'COP': 'Energy', 'OXY': 'Energy',
+    'EOG': 'Energy', 'SLB': 'Energy', 'MPC': 'Energy', 'VLO': 'Energy',
+    'DVN': 'Energy',
+    # Consumer
+    'KO':   'Consumer', 'PEP':  'Consumer', 'WMT':  'Consumer', 'TGT':  'Consumer',
+    'COST': 'Consumer', 'MCD':  'Consumer', 'NKE':  'Consumer', 'HD':   'Consumer',
+    'LOW':  'Consumer', 'TJX':  'Consumer', 'DG':   'Consumer', 'SBUX': 'Consumer',
+    'DIS':  'Consumer',
+    # Industrial
+    'CAT': 'Industrial', 'DE':  'Industrial', 'GE':  'Industrial',
+    'HON': 'Industrial', 'RTX': 'Industrial', 'LMT': 'Industrial',
+    'BA':  'Industrial', 'ETN': 'Industrial',
+    # Materials
+    'FCX': 'Materials', 'NEM': 'Materials', 'CLF': 'Materials',
+    'GDX': 'Materials',
+    # Communication
+    'NFLX':  'Comm', 'CMCSA': 'Comm', 'VZ': 'Comm', 'T': 'Comm',
+    # Commodities
+    'GLD': 'Commodities', 'SLV': 'Commodities',
+}
+
 STARTING_CAPITAL      = 200_000
 TARGET_MONTHLY_RETURN = 0.01   # 1% per month
 
