@@ -426,9 +426,20 @@ def _send_email_summary(df: pd.DataFrame, events: list[str],
 
     cand_rows = ''
     if candidates:
+        seen_sectors: set = set()
+        open_tickers = set(open_puts['ticker'].tolist()) if not open_puts.empty else set()
         for r in candidates:
+            sector = r.get('sector', 'Other')
+            if sector in seen_sectors:
+                continue
+            seen_sectors.add(sector)
+            held = '✓ open' if r['ticker'] in open_tickers else '—'
+            held_style = 'color:#e67e22;font-weight:bold' if held != '—' else 'color:#7f8c8d'
             cand_rows += (
-                f'<tr><td><b>{r["ticker"]}</b></td>'
+                f'<tr>'
+                f'<td style="color:#7f8c8d;font-size:12px">{sector}</td>'
+                f'<td><b>{r["ticker"]}</b></td>'
+                f'<td style="{held_style}">{held}</td>'
                 f'<td>${r["price"]:.2f}</td>'
                 f'<td>{r["iv_rank"]:.0f}</td>'
                 f'<td>${r["put_strike"]} @ ${r["put_bid"]}</td>'
@@ -439,8 +450,8 @@ def _send_email_summary(df: pd.DataFrame, events: list[str],
     cand_html = (
         '<table border="1" cellpadding="5" style="border-collapse:collapse;font-size:13px">'
         '<tr style="background:#2c3e50;color:white">'
-        '<th>Ticker</th><th>Price</th><th>IVR</th><th>Strike @ Bid</th>'
-        '<th>Delta</th><th>Ann Yield</th><th>DTE</th></tr>'
+        '<th>Sector</th><th>Ticker</th><th>Held?</th><th>Price</th><th>IVR</th>'
+        '<th>Strike @ Bid</th><th>Delta</th><th>Ann Yield</th><th>DTE</th></tr>'
         f'{cand_rows}</table>'
     ) if cand_rows else '<p><em>No candidates above threshold today.</em></p>'
 
