@@ -14,7 +14,7 @@ from email.mime.text import MIMEText
 
 from config import (
     STARTING_CAPITAL, TARGET_MONTHLY_RETURN, EMAIL_RECIPIENT,
-    GMAIL_ADDRESS, GMAIL_APP_PASSWORD, STOP_LOSS_PCT,
+    GMAIL_ADDRESS, GMAIL_APP_PASSWORD, STOP_LOSS_PCT, MAX_POSITIONS,
 )
 from screener import screen
 from portfolio import load_trades, open_positions, assigned_shares
@@ -51,7 +51,7 @@ def build_report() -> tuple[str, str]:
     subject = f"Options Report — {today.strftime('%a %b %d, %Y')} | MTD ${mtd:,.0f} / ${target_monthly:,.0f}"
 
     # ── Action items ───────────────────────────────────────────────────────
-    actions = _build_actions(open_pos, candidates, share_pos)
+    actions = _build_actions(open_pos, candidates, share_pos, paper_open)
 
     html = f"""
 <!DOCTYPE html>
@@ -192,7 +192,7 @@ def build_report() -> tuple[str, str]:
     return subject, html, candidates
 
 
-def _build_actions(open_pos_df, candidates, share_pos_df=None) -> list:
+def _build_actions(open_pos_df, candidates, share_pos_df=None, paper_open_df=None) -> list:
     import yfinance as yf
     actions = []
     today = date.today()
@@ -273,19 +273,32 @@ def _build_actions(open_pos_df, candidates, share_pos_df=None) -> list:
                 pass
 
     # ── New opening opportunities ─────────────────────────────────────────
-    open_tickers = set(open_pos_df['ticker'].tolist()) if not open_pos_df.empty else set()
-    for r in candidates[:3]:
-        if r['ticker'] not in open_tickers:
-            actions.append({
-                'type': 'open',
-                'description': (
-                    f"<b>{r['ticker']}</b> — Sell {r['expiry']} "
-                    f"<b>${r['put_strike']} Put</b> @ ${r['put_bid']} bid "
-                    f"({r['put_yield_pct']}% / {r['put_ann_yield']}% ann, "
-                    f"Δ{r['put_delta']}, IVR {r['iv_rank']:.0f}). "
-                    f"Verify quote on Schwab. Add row to trades.csv with your fill."
-                ),
-            })
+    paper_tickers = (set(paper_open_df['ticker'].tolist())
+                     if paper_open_df is not None and not paper_open_df.empty else set())
+    slots_free = MAX_POSITIONS - len(paper_tickers)
+    if slots_free > 0:
+        for r in candidates[:3]:
+            if r['ticker'] not in paper_tickers:
+                actions.append({
+                    'type': 'open',
+                    'description': (
+                        f"<b>{r['ticker']}</b> — Sell {r['expiry']} "
+                        f"<b>${r['put_strike']} Put</b> @ ${r['put_bid']} bid "
+                        f"({r['put_yield_pct']}% / {r['put_ann_yield']}% ann, "
+                        f"Δ{r['put_delta']}, IVR {r['iv_rank']:.0f}). "
+                        f"Verify quote on Schwab. Add row to trades.csv with your fill."
+                    ),
+                })
+    else:
+        actions.append({
+            'type': 'monitor',
+            'description': (
+                f"All {MAX_POSITIONS} slots filled — no new positions until one closes. "
+                f"Top screener candidate if a slot opens: <b>{candidates[0]['ticker']}</b> "
+                f"${candidates[0]['put_strike']} Put @ ${candidates[0]['put_bid']} "
+                f"(IVR {candidates[0]['iv_rank']:.0f})."
+            ) if candidates else f"All {MAX_POSITIONS} slots filled.",
+        })
 
     return actions
 
