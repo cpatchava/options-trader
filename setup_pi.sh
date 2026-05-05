@@ -40,7 +40,7 @@ echo "      Done."
 echo "[5/5] Installing crontab (Mon-Fri, market hours ET)..."
 
 # Write crontab entries — check if already present first
-CRON_REPORT="0 8 * * 1-5 $PROJECT_DIR/run_report.sh"
+CRON_REPORT="0 10 * * 1-5 $PROJECT_DIR/run_report.sh"
 CRON_PAPER="30 16 * * 1-5 $PROJECT_DIR/run_paper_trading.sh"
 
 # Point shell scripts to the venv python and correct project directory
@@ -77,5 +77,5 @@ echo "  3. Verify cron is running:       sudo service cron status"
 echo "  4. Test manually:                $PYTHON $PROJECT_DIR/daily_report.py"
 echo ""
 echo "Cron schedule (all times ET):"
-echo "  08:00  Mon-Fri  Morning screener report  → $PROJECT_DIR/cron.log"
+echo "  10:00  Mon-Fri  Morning screener report  → $PROJECT_DIR/cron.log"
 echo "  16:30  Mon-Fri  Paper trading engine     → $PROJECT_DIR/paper_trading.log"

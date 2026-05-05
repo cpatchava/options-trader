@@ -1,6 +1,6 @@
 #!/bin/bash
 # Runs the daily options report and logs output.
-# Invoked by crontab Mon-Fri at 8 AM ET.
+# Invoked by crontab Mon-Fri at 10 AM ET (30 min after market open).
 DIR="$(cd "$(dirname "$0")" && pwd)"
 PYTHON="$DIR/venv/bin/python3"
 [ ! -f "$PYTHON" ] && PYTHON="$(which python3)"
