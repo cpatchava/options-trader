@@ -548,9 +548,10 @@ def _build_actions(open_puts, open_shares, open_calls, candidates, max_slots) ->
 # ── Email sender ───────────────────────────────────────────────────────────────
 
 def send_report(trader: dict, subject: str, html_body: str):
-    """Send the report to the trader's email address."""
-    recipient = trader.get('email', '')
-    if not recipient:
+    """Send the report to one or more comma-separated emails in the trader's sheet row."""
+    raw = trader.get('email', '') or ''
+    recipients = [e.strip() for e in raw.split(',') if e.strip()]
+    if not recipients:
         print(f"  [SKIP] {trader['name']}: no email address in sheet.")
         return
 
@@ -561,14 +562,14 @@ def send_report(trader: dict, subject: str, html_body: str):
     msg = MIMEMultipart('alternative')
     msg['Subject'] = subject
     msg['From']    = GMAIL_ADDRESS
-    msg['To']      = recipient
+    msg['To']      = ', '.join(recipients)
     msg.attach(MIMEText(html_body, 'html'))
 
     with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
         smtp.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-        smtp.sendmail(GMAIL_ADDRESS, recipient, msg.as_string())
+        smtp.sendmail(GMAIL_ADDRESS, recipients, msg.as_string())
 
-    print(f"  Report emailed to {recipient} ({trader['name']})")
+    print(f"  Report emailed to {', '.join(recipients)} ({trader['name']})")
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
