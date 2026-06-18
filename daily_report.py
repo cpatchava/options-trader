@@ -18,7 +18,7 @@ from config import (
 )
 from screener import screen
 from portfolio import load_trades, open_positions, assigned_shares
-from paper_trading import _load as _load_paper_trades, build_live_positions_html
+from paper_trading import _load as _load_paper_trades, build_live_positions_html, build_live_calls_html
 
 
 # ── Report generation ──────────────────────────────────────────────────────────
@@ -154,7 +154,7 @@ def build_report() -> tuple[str, str]:
         html += ('<table><tr><th>Ticker</th><th>Sector</th><th>Shares</th>'
                  '<th>Cost Basis</th><th>Put Premium</th><th>Net Basis</th>'
                  '<th>Current Price</th><th>Net P&amp;L</th>'
-                 '<th>Stop Level</th><th>Best Covered Call</th></tr>')
+                 '<th>Stop Level</th></tr>')
         for _, row in paper_shares.iterrows():
             tkr      = row['ticker']
             basis    = float(row['strike'])
@@ -162,28 +162,18 @@ def build_report() -> tuple[str, str]:
             sector   = TICKER_SECTORS.get(tkr, 'Other')
             stop     = round(basis * (1 - STOP_LOSS_PCT), 2)
 
-            # Premium collected on the put that was assigned
             put_match = assigned_puts[assigned_puts['ticker'] == tkr]
             put_pnl   = float(put_match['pnl'].iloc[0]) if not put_match.empty else 0.0
-            net_basis = basis - (put_pnl / n_shares)  # effective per-share cost
+            net_basis = basis - (put_pnl / n_shares)
 
             try:
-                from screener import _find_target_call
                 cur_px  = float(yf.Ticker(tkr).fast_info.last_price)
                 net_pnl = (cur_px - basis) * n_shares + put_pnl
                 net_pnl_str = f'<span class="{"green" if net_pnl >= 0 else "red"}">${net_pnl:+,.0f}</span>'
                 px_str  = f'${cur_px:.2f}'
-                call    = _find_target_call(tkr, cur_px, net_basis, today)
-                if call:
-                    cc_str = (f'<span class="green">${call["strike"]:.0f} call '
-                              f'@ ${call["bid"]:.2f} Δ{call["delta"]:.2f} '
-                              f'{call["expiry_str"]} ({call["dte"]}d)</span>')
-                else:
-                    cc_str = f'No liquid call ≥ ${net_basis:.2f}'
             except Exception:
                 net_pnl_str = '—'
                 px_str      = 'N/A'
-                cc_str      = '—'
             html += (f'<tr><td><b>{tkr}</b></td>'
                      f'<td style="color:#7f8c8d;font-size:12px">{sector}</td>'
                      f'<td>{n_shares}</td>'
@@ -192,14 +182,18 @@ def build_report() -> tuple[str, str]:
                      f'<td>${net_basis:.2f}</td>'
                      f'<td>{px_str}</td>'
                      f'<td>{net_pnl_str}</td>'
-                     f'<td>${stop:.2f}</td>'
-                     f'<td>{cc_str}</td></tr>\n')
+                     f'<td>${stop:.2f}</td></tr>\n')
         html += '</table>'
 
     # ── Live puts ──────────────────────────────────────────────────────────
-    paper_puts = paper_df[(paper_df['status'] == 'open') & (paper_df['option_type'] == 'put')]
+    paper_puts  = paper_df[(paper_df['status'] == 'open') & (paper_df['option_type'] == 'put')]
+    paper_calls = paper_df[(paper_df['status'] == 'open') & (paper_df['option_type'] == 'call')]
     html += '<h3>OPEN PAPER PUTS — Live Pricing</h3>'
     html += build_live_positions_html(paper_puts, today)
+
+    # ── Live covered calls ─────────────────────────────────────────────────
+    html += '<h3>OPEN COVERED CALLS — Live Pricing</h3>'
+    html += build_live_calls_html(paper_calls, today)
 
     # ── New opportunities — best per sector ───────────────────────────────
     html += '<h3>NEW OPPORTUNITIES — Best per Sector</h3>'

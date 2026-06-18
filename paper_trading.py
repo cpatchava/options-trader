@@ -433,6 +433,77 @@ def write_covered_calls(df: pd.DataFrame, today: date) -> tuple[pd.DataFrame, li
     return df, events
 
 
+def build_live_calls_html(open_calls: pd.DataFrame, today: date) -> str:
+    """HTML table of open covered calls with live bid, decay, and DTE."""
+    if open_calls.empty:
+        return '<p><em>No open covered calls.</em></p>'
+
+    rows = ''
+    for _, row in open_calls.iterrows():
+        ticker     = row['ticker']
+        strike     = float(row['strike'])
+        open_prem  = float(row['open_premium'])
+        expiry_str = str(row['expiry'])[:10]
+        n          = int(row['contracts'])
+        dte        = (date.fromisoformat(expiry_str) - today).days
+        take_target = round(open_prem * PROFIT_TAKE_PCT, 2)
+        sector      = TICKER_SECTORS.get(ticker, 'Other')
+
+        cur_stock = _current_stock_price(ticker)
+        cur_bid   = _current_option_bid(ticker, expiry_str, strike, 'call')
+
+        stock_str = f'${cur_stock:.2f}' if cur_stock else 'N/A'
+        itm_str   = (f'{(cur_stock - strike) / cur_stock * 100:+.1f}%'
+                     if cur_stock else '—')
+
+        if cur_bid is not None:
+            decayed_pct = (open_prem - cur_bid) / open_prem * 100
+            if decayed_pct >= 50:
+                decay_color = '#27ae60'
+                decay_label = f'{decayed_pct:.0f}% ✓ TAKE'
+            elif decayed_pct >= 30:
+                decay_color = '#e67e22'
+                decay_label = f'{decayed_pct:.0f}%'
+            else:
+                decay_color = '#555'
+                decay_label = f'{decayed_pct:.0f}%'
+            distance = cur_bid - take_target
+            dist_str = '→ TAKE NOW' if distance <= 0 else f'${distance:.2f} away'
+            bid_str  = f'${cur_bid:.2f}'
+        else:
+            decay_color = '#999'
+            decay_label = 'N/A'
+            bid_str     = 'N/A'
+            dist_str    = '—'
+
+        rows += (
+            f'<tr>'
+            f'<td><b>{ticker}</b></td>'
+            f'<td style="color:#7f8c8d;font-size:12px">{sector}</td>'
+            f'<td>{n}x ${strike:.0f}</td>'
+            f'<td>{stock_str} ({itm_str})</td>'
+            f'<td>${open_prem:.2f}</td>'
+            f'<td>{bid_str}</td>'
+            f'<td style="color:{decay_color};font-weight:bold">{decay_label}</td>'
+            f'<td>${take_target:.2f}</td>'
+            f'<td>{dist_str}</td>'
+            f'<td>{dte}d</td>'
+            f'</tr>\n'
+        )
+
+    return (
+        '<table border="1" cellpadding="5" '
+        'style="border-collapse:collapse;width:100%;font-size:13px">'
+        '<tr style="background:#2c3e50;color:white">'
+        '<th>Ticker</th><th>Sector</th><th>Position</th><th>Stock (vs strike)</th>'
+        '<th>Opened @</th><th>Current Bid</th><th>Decayed</th>'
+        '<th>50% Take @</th><th>Distance</th><th>DTE</th>'
+        '</tr>'
+        f'{rows}'
+        '</table>'
+    )
+
+
 # ── Portfolio value ───────────────────────────────────────────────────────────
 
 def _portfolio_value(df: pd.DataFrame, starting_capital: float) -> float:
