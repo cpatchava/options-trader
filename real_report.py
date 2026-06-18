@@ -207,45 +207,15 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
                      f'<td>${stop:.2f}</td></tr>\n')
         html += '</table>\n'
 
-    # ── Open covered calls ─────────────────────────────────────────────────
+    # ── Open covered calls — live pricing ─────────────────────────────────
     if not open_calls.empty:
-        html += '<h3>OPEN COVERED CALLS</h3>\n'
-        html += ('<table><tr><th>Ticker</th><th>Sector</th><th>Strike</th>'
-                 '<th>Expiry</th><th>Premium</th><th>Contracts</th>'
-                 '<th>Notes</th></tr>\n')
-        for _, row in open_calls.iterrows():
-            tkr    = str(row.get('ticker', ''))
-            sector = TICKER_SECTORS.get(tkr, 'Other')
-            exp    = row.get('expiry', '')
-            exp_str = exp.strftime('%Y-%m-%d') if hasattr(exp, 'strftime') else str(exp)[:10]
-            html += (f'<tr><td><b>{tkr}</b></td>'
-                     f'<td style="color:#7f8c8d;font-size:12px">{sector}</td>'
-                     f'<td>${float(row.get("strike",0)):.2f}</td>'
-                     f'<td>{exp_str}</td>'
-                     f'<td>${float(row.get("premium",0)):.2f}</td>'
-                     f'<td>{int(row.get("contracts",1))}</td>'
-                     f'<td>{_notes(row)}</td></tr>\n')
-        html += '</table>\n'
+        html += '<h3>OPEN COVERED CALLS — Live Pricing</h3>\n'
+        html += _live_options_table(open_calls, today, 'call')
 
-    # ── Open puts ──────────────────────────────────────────────────────────
+    # ── Open puts — live pricing ───────────────────────────────────────────
     if not open_puts.empty:
-        html += '<h3>OPEN PUTS</h3>\n'
-        html += ('<table><tr><th>Ticker</th><th>Sector</th><th>Strike</th>'
-                 '<th>Expiry</th><th>Premium</th><th>Contracts</th>'
-                 '<th>Notes</th></tr>\n')
-        for _, row in open_puts.iterrows():
-            tkr    = str(row.get('ticker', ''))
-            sector = TICKER_SECTORS.get(tkr, 'Other')
-            exp    = row.get('expiry', '')
-            exp_str = exp.strftime('%Y-%m-%d') if hasattr(exp, 'strftime') else str(exp)[:10]
-            html += (f'<tr><td><b>{tkr}</b></td>'
-                     f'<td style="color:#7f8c8d;font-size:12px">{sector}</td>'
-                     f'<td>${float(row.get("strike",0)):.2f}</td>'
-                     f'<td>{exp_str}</td>'
-                     f'<td>${float(row.get("premium",0)):.2f}</td>'
-                     f'<td>{int(row.get("contracts",1))}</td>'
-                     f'<td>{_notes(row)}</td></tr>\n')
-        html += '</table>\n'
+        html += '<h3>OPEN PUTS — Live Pricing</h3>\n'
+        html += _live_options_table(open_puts, today, 'put')
 
     # ── Roll opportunities (screener hits existing open puts) ─────────────
     put_tickers = set(open_puts['ticker'].astype(str).tolist()) if not open_puts.empty else set()
@@ -343,6 +313,93 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
 </html>"""
 
     return subject, html
+
+
+def _current_option_bid(ticker: str, expiry_str: str, strike: float, option_type: str = 'put'):
+    try:
+        import yfinance as yf
+        chain = yf.Ticker(ticker).option_chain(expiry_str)
+        opts  = chain.puts if option_type == 'put' else chain.calls
+        row   = opts[abs(opts['strike'] - strike) < 0.01]
+        if not row.empty:
+            bid = float(row['bid'].iloc[0])
+            return bid if bid > 0 else None
+    except Exception:
+        pass
+    return None
+
+
+def _current_stock_price(ticker: str):
+    try:
+        import yfinance as yf
+        return float(yf.Ticker(ticker).fast_info.last_price)
+    except Exception:
+        return None
+
+
+def _live_options_table(df, today, option_type: str) -> str:
+    from config import PROFIT_TAKE_PCT
+    header = (
+        '<table border="1" cellpadding="5" '
+        'style="border-collapse:collapse;width:100%;font-size:13px">'
+        '<tr style="background:#2c3e50;color:white">'
+        '<th>Ticker</th><th>Sector</th><th>Position</th>'
+        '<th>Stock (vs strike)</th><th>Opened @</th><th>Current Bid</th>'
+        '<th>Decayed</th><th>50% Take @</th><th>Distance</th><th>DTE</th>'
+        '</tr>\n'
+    )
+    rows = ''
+    for _, row in df.iterrows():
+        tkr       = str(row.get('ticker', ''))
+        strike    = float(row.get('strike', 0) or 0)
+        open_prem = float(row.get('premium', 0) or 0)
+        n         = int(row.get('contracts', 1) or 1)
+        exp       = row.get('expiry', '')
+        exp_str   = exp.strftime('%Y-%m-%d') if hasattr(exp, 'strftime') else str(exp)[:10]
+        sector    = TICKER_SECTORS.get(tkr, 'Other')
+        try:
+            dte = (date.fromisoformat(exp_str) - today).days
+        except Exception:
+            dte = '—'
+
+        take_target = round(open_prem * PROFIT_TAKE_PCT, 2)
+        cur_stock   = _current_stock_price(tkr)
+        cur_bid     = _current_option_bid(tkr, exp_str, strike, option_type)
+
+        stock_str = f'${cur_stock:.2f}' if cur_stock else 'N/A'
+        pct_from  = (f'{(cur_stock - strike) / cur_stock * 100:+.1f}%'
+                     if cur_stock else '—')
+
+        if cur_bid is not None:
+            decayed_pct = (open_prem - cur_bid) / open_prem * 100 if open_prem else 0
+            if decayed_pct >= 50:
+                decay_color, decay_label = '#27ae60', f'{decayed_pct:.0f}% ✓ TAKE'
+            elif decayed_pct >= 30:
+                decay_color, decay_label = '#e67e22', f'{decayed_pct:.0f}%'
+            else:
+                decay_color, decay_label = '#555', f'{decayed_pct:.0f}%'
+            distance = cur_bid - take_target
+            dist_str = '→ TAKE NOW' if distance <= 0 else f'${distance:.2f} away'
+            bid_str  = f'${cur_bid:.2f}'
+        else:
+            decay_color, decay_label = '#999', 'N/A'
+            bid_str, dist_str = 'N/A', '—'
+
+        rows += (
+            f'<tr>'
+            f'<td><b>{tkr}</b></td>'
+            f'<td style="color:#7f8c8d;font-size:12px">{sector}</td>'
+            f'<td>{n}x ${strike:.0f}</td>'
+            f'<td>{stock_str} ({pct_from})</td>'
+            f'<td>${open_prem:.2f}</td>'
+            f'<td>{bid_str}</td>'
+            f'<td style="color:{decay_color};font-weight:bold">{decay_label}</td>'
+            f'<td>${take_target:.2f}</td>'
+            f'<td>{dist_str}</td>'
+            f'<td>{dte}d</td>'
+            f'</tr>\n'
+        )
+    return header + rows + '</table>\n'
 
 
 def _build_roll_analysis(open_puts, candidates) -> list:
