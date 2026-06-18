@@ -103,8 +103,8 @@ def build_report() -> tuple[str, str]:
     <div class="metric-lbl">Target Progress</div>
   </div>
   <div class="metric">
-    <div class="metric-val">{open_count}</div>
-    <div class="metric-lbl">Open Puts</div>
+    <div class="metric-val">{len(paper_open)} puts{f" + {len(paper_shares)} shares" if not paper_shares.empty else ""}</div>
+    <div class="metric-lbl">Open Slots ({open_count}/{MAX_POSITIONS})</div>
   </div>
   <div class="metric">
     <div class="metric-val">{win_rate}%</div>
@@ -148,34 +148,45 @@ def build_report() -> tuple[str, str]:
     # ── Held shares ────────────────────────────────────────────────────────
     if not paper_shares.empty:
         import yfinance as yf
+        # Look up premium collected from the assigned put for each share position
+        assigned_puts = paper_df[paper_df['close_type'] == 'assigned']
         html += '<h3>HELD SHARES (Pending Covered Call)</h3>'
         html += ('<table><tr><th>Ticker</th><th>Sector</th><th>Shares</th>'
-                 '<th>Cost Basis</th><th>Current Price</th><th>Unrealized P&L</th>'
+                 '<th>Cost Basis</th><th>Put Premium</th><th>Net Basis</th>'
+                 '<th>Current Price</th><th>Net P&amp;L</th>'
                  '<th>Stop Level</th><th>CC Eligible</th></tr>')
         for _, row in paper_shares.iterrows():
-            tkr       = row['ticker']
-            basis     = float(row['strike'])
-            n_shares  = int(row['contracts']) * 100
-            sector    = TICKER_SECTORS.get(tkr, 'Other')
-            stop      = round(basis * (1 - STOP_LOSS_PCT), 2)
+            tkr      = row['ticker']
+            basis    = float(row['strike'])
+            n_shares = int(row['contracts']) * 100
+            sector   = TICKER_SECTORS.get(tkr, 'Other')
+            stop     = round(basis * (1 - STOP_LOSS_PCT), 2)
+
+            # Premium collected on the put that was assigned
+            put_match = assigned_puts[assigned_puts['ticker'] == tkr]
+            put_pnl   = float(put_match['pnl'].iloc[0]) if not put_match.empty else 0.0
+            net_basis = basis - (put_pnl / n_shares)  # effective per-share cost
+
             try:
-                cur_px = float(yf.Ticker(tkr).fast_info.last_price)
-                unreal = (cur_px - basis) * n_shares
-                unreal_str = f'<span class="{"green" if unreal >= 0 else "red"}">${unreal:+,.0f}</span>'
-                px_str = f'${cur_px:.2f}'
-                cc_ok  = cur_px >= basis
-                cc_str = ('<span class="green">Yes — write call ≥ $' + f'{basis:.0f}</span>'
-                          if cc_ok else f'No — ${basis - cur_px:.2f} below basis')
+                cur_px  = float(yf.Ticker(tkr).fast_info.last_price)
+                net_pnl = (cur_px - basis) * n_shares + put_pnl
+                net_pnl_str = f'<span class="{"green" if net_pnl >= 0 else "red"}">${net_pnl:+,.0f}</span>'
+                px_str  = f'${cur_px:.2f}'
+                cc_ok   = cur_px >= basis
+                cc_str  = ('<span class="green">Yes — write call ≥ $' + f'{basis:.0f}</span>'
+                           if cc_ok else f'No — ${basis - cur_px:.2f} below basis')
             except Exception:
-                unreal_str = '—'
-                px_str     = 'N/A'
-                cc_str     = '—'
+                net_pnl_str = '—'
+                px_str      = 'N/A'
+                cc_str      = '—'
             html += (f'<tr><td><b>{tkr}</b></td>'
                      f'<td style="color:#7f8c8d;font-size:12px">{sector}</td>'
                      f'<td>{n_shares}</td>'
                      f'<td>${basis:.2f}</td>'
+                     f'<td class="green">${put_pnl:+,.0f}</td>'
+                     f'<td>${net_basis:.2f}</td>'
                      f'<td>{px_str}</td>'
-                     f'<td>{unreal_str}</td>'
+                     f'<td>{net_pnl_str}</td>'
                      f'<td>${stop:.2f}</td>'
                      f'<td>{cc_str}</td></tr>\n')
         html += '</table>'
