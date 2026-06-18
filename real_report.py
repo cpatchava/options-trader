@@ -64,8 +64,7 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
 
     mtd_pct    = (mtd / target_monthly * 100) if target_monthly else 0
     open_count = len(open_puts) + len(open_shares)
-    # infer max slots from capital (default 5 — same as paper trading)
-    max_slots  = trader.get('max_positions', 5)
+    max_slots  = trader.get('max_positions', None)  # optional limit; None = no cap
 
     subject = (
         f"Options Report [{name}] — {today.strftime('%a %b %d, %Y')} "
@@ -119,7 +118,7 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
   </div>
   <div class="metric">
     <div class="metric-val">{len(open_puts)} puts{f" + {len(open_shares)} shares" if not open_shares.empty else ""}</div>
-    <div class="metric-lbl">Open Slots ({open_count}/{max_slots})</div>
+    <div class="metric-lbl">Open Positions{f" ({open_count}/{max_slots} slots)" if max_slots else ""}</div>
   </div>
   <div class="metric">
     <div class="metric-val">${all_time:,.0f}</div>
@@ -225,7 +224,7 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
                      f'<td>{exp_str}</td>'
                      f'<td>${float(row.get("premium",0)):.2f}</td>'
                      f'<td>{int(row.get("contracts",1))}</td>'
-                     f'<td>{str(row.get("notes","") or "")}</td></tr>\n')
+                     f'<td>{_notes(row)}</td></tr>\n')
         html += '</table>\n'
 
     # ── Open puts ──────────────────────────────────────────────────────────
@@ -245,7 +244,7 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
                      f'<td>{exp_str}</td>'
                      f'<td>${float(row.get("premium",0)):.2f}</td>'
                      f'<td>{int(row.get("contracts",1))}</td>'
-                     f'<td>{str(row.get("notes","") or "")}</td></tr>\n')
+                     f'<td>{_notes(row)}</td></tr>\n')
         html += '</table>\n'
 
     # ── New opportunities ──────────────────────────────────────────────────
@@ -331,7 +330,21 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
     return subject, html
 
 
-def _build_actions(open_puts, open_shares, open_calls, candidates, max_slots: int) -> list:
+def _notes(row) -> str:
+    """Return notes string, converting NaN to empty."""
+    import math
+    v = row.get('notes', '')
+    if v is None:
+        return ''
+    try:
+        if math.isnan(float(v)):
+            return ''
+    except (TypeError, ValueError):
+        pass
+    return str(v)
+
+
+def _build_actions(open_puts, open_shares, open_calls, candidates, max_slots) -> list:
     """Generate action items from real trade data."""
     import yfinance as yf
     actions = []
@@ -414,11 +427,12 @@ def _build_actions(open_puts, open_shares, open_calls, candidates, max_slots: in
         open_tickers |= set(open_puts['ticker'].astype(str).tolist())
     if not open_shares.empty:
         open_tickers |= set(open_shares['ticker'].astype(str).tolist())
-    slots_free = max_slots - len(open_tickers)
 
-    if slots_free > 0 and candidates:
-        for r in candidates[:3]:
-            if r['ticker'] not in open_tickers:
+    # Always show top opportunities — no hard slot cap on real portfolio
+    if candidates:
+        shown = 0
+        for r in candidates[:5]:
+            if r['ticker'] not in open_tickers and shown < 3:
                 actions.append({
                     'type': 'open',
                     'description': (
@@ -427,20 +441,10 @@ def _build_actions(open_puts, open_shares, open_calls, candidates, max_slots: in
                         f"({r['put_yield_pct']}% / {r['put_ann_yield']}% ann, "
                         f"Δ{r['put_delta']}, IVR {r['iv_rank']:.0f}). "
                         f"Verify quote on Schwab. "
-                        f"<b>Add row to your Google Sheet tab with status=open.</b>"
+                        f"<b>Add row to your sheet with status=open.</b>"
                     ),
                 })
-    elif candidates:
-        top = candidates[0]
-        actions.append({
-            'type': 'monitor',
-            'description': (
-                f"All {max_slots} slots filled — no new positions until one closes. "
-                f"Top candidate when a slot opens: <b>{top['ticker']}</b> "
-                f"${top['put_strike']} Put @ ${top['put_bid']} "
-                f"(IVR {top['iv_rank']:.0f})."
-            ),
-        })
+                shown += 1
 
     return actions
 
