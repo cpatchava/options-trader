@@ -256,12 +256,13 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
         if not open_shares.empty:
             open_tickers |= set(open_shares['ticker'].astype(str).tolist())
 
-        seen_sectors: set = set()
+        # top 3 per sector
+        sector_counts: dict = {}
         sector_best = []
         for r in candidates:
             s = r.get('sector', 'Other')
-            if s not in seen_sectors:
-                seen_sectors.add(s)
+            if sector_counts.get(s, 0) < 3:
+                sector_counts[s] = sector_counts.get(s, 0) + 1
                 sector_best.append(r)
 
         html += ('<table><tr><th>Sector</th><th>Ticker</th><th>Held?</th>'
@@ -293,30 +294,6 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
         html += '</table>\n'
     else:
         html += '<p><em>No screener candidates today (market closed or data unavailable).</em></p>\n'
-
-    # ── Closed trade history (last 10) ─────────────────────────────────────
-    if not closed.empty:
-        recent = closed.sort_values('close_date', ascending=False).head(10)
-        html += '<h3>RECENT CLOSED TRADES (last 10)</h3>\n'
-        html += ('<table><tr><th>Ticker</th><th>Type</th><th>Strike</th>'
-                 '<th>Opened</th><th>Closed</th><th>Premium</th>'
-                 '<th>Close Price</th><th>P&amp;L</th></tr>\n')
-        for _, row in recent.iterrows():
-            pnl     = float(row.get('pnl', 0) or 0)
-            pnl_cls = 'green' if pnl >= 0 else 'red'
-            o_date  = row.get('open_date', '')
-            c_date  = row.get('close_date', '')
-            o_str   = o_date.strftime('%Y-%m-%d') if hasattr(o_date, 'strftime') else str(o_date)[:10]
-            c_str   = c_date.strftime('%Y-%m-%d') if hasattr(c_date, 'strftime') else str(c_date)[:10]
-            html += (f'<tr><td><b>{row.get("ticker","")}</b></td>'
-                     f'<td>{str(row.get("type","")).upper()}</td>'
-                     f'<td>${float(row.get("strike",0)):.2f}</td>'
-                     f'<td>{o_str}</td>'
-                     f'<td>{c_str}</td>'
-                     f'<td>${float(row.get("premium",0)):.2f}</td>'
-                     f'<td>${float(row.get("close_price",0) or 0):.2f}</td>'
-                     f'<td class="{pnl_cls}">${pnl:+,.0f}</td></tr>\n')
-        html += '</table>\n'
 
     html += f"""
 <footer>
