@@ -184,6 +184,7 @@ def _find_target_call(ticker: str, S: float, cost_basis: float, today: date) -> 
                     'strike':     strike,
                     'bid':        bid,
                     'delta':      d_abs,
+                    'expiry':     exp_str,            # ISO string e.g. '2026-07-17'
                     'expiry_str': exp_date.strftime('%b %d'),
                     'dte':        dte,
                 })

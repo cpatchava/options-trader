@@ -154,7 +154,7 @@ def build_report() -> tuple[str, str]:
         html += ('<table><tr><th>Ticker</th><th>Sector</th><th>Shares</th>'
                  '<th>Cost Basis</th><th>Put Premium</th><th>Net Basis</th>'
                  '<th>Current Price</th><th>Net P&amp;L</th>'
-                 '<th>Stop Level</th><th>CC Eligible</th></tr>')
+                 '<th>Stop Level</th><th>Best Covered Call</th></tr>')
         for _, row in paper_shares.iterrows():
             tkr      = row['ticker']
             basis    = float(row['strike'])
@@ -168,13 +168,18 @@ def build_report() -> tuple[str, str]:
             net_basis = basis - (put_pnl / n_shares)  # effective per-share cost
 
             try:
+                from screener import _find_target_call
                 cur_px  = float(yf.Ticker(tkr).fast_info.last_price)
                 net_pnl = (cur_px - basis) * n_shares + put_pnl
                 net_pnl_str = f'<span class="{"green" if net_pnl >= 0 else "red"}">${net_pnl:+,.0f}</span>'
                 px_str  = f'${cur_px:.2f}'
-                cc_ok   = cur_px >= basis
-                cc_str  = ('<span class="green">Yes — write call ≥ $' + f'{basis:.0f}</span>'
-                           if cc_ok else f'No — ${basis - cur_px:.2f} below basis')
+                call    = _find_target_call(tkr, cur_px, net_basis, today)
+                if call:
+                    cc_str = (f'<span class="green">${call["strike"]:.0f} call '
+                              f'@ ${call["bid"]:.2f} Δ{call["delta"]:.2f} '
+                              f'{call["expiry_str"]} ({call["dte"]}d)</span>')
+                else:
+                    cc_str = f'No liquid call ≥ ${net_basis:.2f}'
             except Exception:
                 net_pnl_str = '—'
                 px_str      = 'N/A'

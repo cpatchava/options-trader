@@ -31,7 +31,7 @@ from config import (
     STOP_LOSS_PCT, EMAIL_RECIPIENT, GMAIL_ADDRESS, GMAIL_APP_PASSWORD,
     TICKER_SECTORS,
 )
-from screener import screen
+from screener import screen, _find_target_call
 
 PAPER_TRADES_FILE = Path('data/paper_trades.csv')
 PAPER_LOG_FILE    = Path('data/paper_log.csv')
@@ -167,7 +167,7 @@ def manage_positions(df: pd.DataFrame, today: date) -> tuple[pd.DataFrame, list[
                 df.at[idx, 'status']        = 'closed'
                 events.append(f"50% TAKE  {ticker} {n}x${strike:.0f} put — closed @ ${cur_bid:.2f} for +${pnl:,.0f}")
 
-    # ── Open share positions (waiting for recovery or stop) ───────────────────
+    # ── Open share positions (stop loss check) ───────────────────────────────
     open_shares = df[(df['status'] == 'open') & (df['option_type'] == 'shares')].copy()
 
     for idx, row in open_shares.iterrows():
@@ -180,7 +180,6 @@ def manage_positions(df: pd.DataFrame, today: date) -> tuple[pd.DataFrame, list[
             continue
 
         if cur_px <= stop_level:
-            # Stop triggered
             loss = (cur_px - cost_basis) * 100 * n - COMMISSION * n * 2
             df.at[idx, 'close_date']    = pd.Timestamp(today)
             df.at[idx, 'close_premium'] = round(cur_px, 2)
@@ -188,6 +187,68 @@ def manage_positions(df: pd.DataFrame, today: date) -> tuple[pd.DataFrame, list[
             df.at[idx, 'pnl']           = round(loss, 2)
             df.at[idx, 'status']        = 'closed'
             events.append(f"STOP LOSS {ticker} {n*100} shares @ ${cur_px:.2f} (basis ${cost_basis:.2f}) — P&L ${loss:,.0f}")
+
+    # ── Open covered calls (50% take or expiry/assignment) ───────────────────
+    open_calls = df[(df['status'] == 'open') & (df['option_type'] == 'call')].copy()
+    assigned_puts = df[df['close_type'] == 'assigned']
+
+    for idx, row in open_calls.iterrows():
+        ticker     = row['ticker']
+        expiry     = row['expiry'].date()
+        dte        = (expiry - today).days
+        n          = int(row['contracts'])
+        prem       = float(row['open_premium'])
+        strike     = float(row['strike'])
+        expiry_str = str(expiry)
+
+        if dte <= 0:
+            cur_px = _current_stock_price(ticker)
+            if cur_px is not None and cur_px >= strike:
+                # Called away — close shares and call together
+                put_match = assigned_puts[assigned_puts['ticker'] == ticker]
+                put_pnl   = float(put_match['pnl'].iloc[0]) if not put_match.empty else 0.0
+                share_idx = df[(df['status'] == 'open') & (df['option_type'] == 'shares') & (df['ticker'] == ticker)].index
+                share_basis = float(df.at[share_idx[0], 'strike']) if len(share_idx) else strike
+                share_pnl = (strike - share_basis) * 100 * n - COMMISSION * n * 2
+                call_pnl  = prem * 100 * n - COMMISSION * n * 2
+                # Close the call
+                df.at[idx, 'close_date']    = pd.Timestamp(today)
+                df.at[idx, 'close_premium'] = 0.0
+                df.at[idx, 'close_type']    = 'cc_assigned'
+                df.at[idx, 'pnl']           = round(call_pnl, 2)
+                df.at[idx, 'status']        = 'closed'
+                # Close the shares
+                if len(share_idx):
+                    df.at[share_idx[0], 'close_date']    = pd.Timestamp(today)
+                    df.at[share_idx[0], 'close_premium'] = round(cur_px, 2)
+                    df.at[share_idx[0], 'close_type']    = 'cc_assigned'
+                    df.at[share_idx[0], 'pnl']           = round(share_pnl, 2)
+                    df.at[share_idx[0], 'status']        = 'closed'
+                total_cycle = put_pnl + call_pnl + share_pnl
+                events.append(f"CC ASSIGNED {ticker} — shares called away @ ${strike:.0f}  "
+                              f"full cycle P&L ${total_cycle:+,.0f}")
+            else:
+                # Call expired OTM — keep premium, keep shares
+                call_pnl = prem * 100 * n - COMMISSION * n * 2
+                df.at[idx, 'close_date']    = pd.Timestamp(today)
+                df.at[idx, 'close_premium'] = 0.0
+                df.at[idx, 'close_type']    = 'expired_otm'
+                df.at[idx, 'pnl']           = round(call_pnl, 2)
+                df.at[idx, 'status']        = 'closed'
+                events.append(f"CC EXPIRED {ticker} ${strike:.0f} call — premium ${call_pnl:+,.0f} kept, "
+                              f"shares retained")
+        else:
+            # 50% profit take on the call
+            cur_bid = _current_option_bid(ticker, expiry_str, strike, 'call')
+            if cur_bid is not None and cur_bid <= prem * PROFIT_TAKE_PCT:
+                call_pnl = (prem - cur_bid) * 100 * n - COMMISSION * n * 2
+                df.at[idx, 'close_date']    = pd.Timestamp(today)
+                df.at[idx, 'close_premium'] = round(cur_bid, 2)
+                df.at[idx, 'close_type']    = 'profit_take'
+                df.at[idx, 'pnl']           = round(call_pnl, 2)
+                df.at[idx, 'status']        = 'closed'
+                events.append(f"CC 50% TAKE {ticker} ${strike:.0f} call — closed @ ${cur_bid:.2f} "
+                              f"for +${call_pnl:+,.0f}")
 
     return df, events
 
@@ -260,6 +321,69 @@ def open_new_positions(df: pd.DataFrame, candidates: list, today: date,
                       f"(${n*cash_req:,.0f} capital)")
         open_tickers.add(ticker)
         slots_free -= 1
+
+    return df, events
+
+
+# ── Write covered calls on held shares ────────────────────────────────────────
+
+def write_covered_calls(df: pd.DataFrame, today: date) -> tuple[pd.DataFrame, list[str]]:
+    """
+    For each open share position with no existing covered call, find and write
+    a covered call at strike >= net_basis (original strike minus put premium collected).
+    """
+    events = []
+    open_shares = df[(df['status'] == 'open') & (df['option_type'] == 'shares')]
+    if open_shares.empty:
+        return df, events
+
+    assigned_puts = df[df['close_type'] == 'assigned']
+    open_calls    = df[(df['status'] == 'open') & (df['option_type'] == 'call')]
+    covered_tickers = set(open_calls['ticker'].tolist())
+
+    for _, row in open_shares.iterrows():
+        ticker   = row['ticker']
+        if ticker in covered_tickers:
+            continue  # already have a call open
+
+        n        = int(row['contracts'])
+        basis    = float(row['strike'])
+
+        # Net basis: original strike minus per-share premium banked on the assigned put
+        put_match = assigned_puts[assigned_puts['ticker'] == ticker]
+        put_pnl   = float(put_match['pnl'].iloc[0]) if not put_match.empty else 0.0
+        net_basis = basis - (put_pnl / (n * 100))
+
+        try:
+            S = float(yf.Ticker(ticker).fast_info.last_price)
+        except Exception:
+            continue
+
+        call = _find_target_call(ticker, S, net_basis, today)
+        if call is None:
+            continue
+
+        call_row = {
+            'open_date':       today,
+            'ticker':          ticker,
+            'option_type':     'call',
+            'strike':          call['strike'],
+            'expiry':          pd.Timestamp(call['expiry']),
+            'contracts':       n,
+            'open_premium':    call['bid'],
+            'contract_symbol': f"{ticker}_{call['expiry']}_{call['strike']:.0f}C",
+            'close_date':      pd.NaT,
+            'close_premium':   None,
+            'close_type':      None,
+            'pnl':             None,
+            'status':          'open',
+        }
+        df = pd.concat([df, pd.DataFrame([call_row])], ignore_index=True)
+        gross = call['bid'] * 100 * n
+        events.append(f"CC OPENED {ticker} {n}x ${call['strike']:.0f} call exp "
+                      f"{call['expiry_str']} @ ${call['bid']:.2f} bid  "
+                      f"+${gross:,.0f} premium  (net basis ${net_basis:.2f})")
+        covered_tickers.add(ticker)
 
     return df, events
 
@@ -545,7 +669,10 @@ def daily_run():
     portfolio_value = _portfolio_value(df, STARTING_CAPITAL)
     df, open_events = open_new_positions(df, candidates, today, portfolio_value)
 
-    all_events = mgmt_events + open_events
+    # Step 2b: write covered calls on any uncovered share positions
+    df, cc_events = write_covered_calls(df, today)
+
+    all_events = mgmt_events + open_events + cc_events
 
     # Step 3: save
     _save(df)
