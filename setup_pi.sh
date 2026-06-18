@@ -41,26 +41,32 @@ echo "[5/5] Installing crontab (Mon-Fri, market hours ET)..."
 
 # Write crontab entries — check if already present first
 CRON_REPORT="0 10 * * 1-5 $PROJECT_DIR/run_report.sh"
+CRON_REAL="0 10 * * 1-5 $PROJECT_DIR/run_real_report.sh"
 CRON_PAPER="30 16 * * 1-5 $PROJECT_DIR/run_paper_trading.sh"
 
 # Point shell scripts to the venv python and correct project directory
 sed -i "s|/usr/local/Cellar/python@3.13/3.13.7/bin/python3.13|$PYTHON|g" \
     "$PROJECT_DIR/run_report.sh" \
+    "$PROJECT_DIR/run_real_report.sh" \
     "$PROJECT_DIR/run_paper_trading.sh"
 sed -i "s|/usr/bin/python3 |$PYTHON |g" \
     "$PROJECT_DIR/run_report.sh" \
+    "$PROJECT_DIR/run_real_report.sh" \
     "$PROJECT_DIR/run_paper_trading.sh"
 # Replace any hardcoded project paths (e.g. Mac paths) with this machine's path
 sed -i "s|cd .*options-trader|cd $PROJECT_DIR|g" \
     "$PROJECT_DIR/run_report.sh" \
+    "$PROJECT_DIR/run_real_report.sh" \
     "$PROJECT_DIR/run_paper_trading.sh"
 sed -i "s|>> .*/options-trader/|>> $PROJECT_DIR/|g" \
     "$PROJECT_DIR/run_report.sh" \
+    "$PROJECT_DIR/run_real_report.sh" \
     "$PROJECT_DIR/run_paper_trading.sh"
 
 # Install cron entries (preserving any existing ones)
 ( crontab -l 2>/dev/null | grep -v "options-trader"; \
   echo "$CRON_REPORT"; \
+  echo "$CRON_REAL"; \
   echo "$CRON_PAPER" ) | crontab -
 
 echo "      Crontab installed:"
@@ -77,5 +83,12 @@ echo "  3. Verify cron is running:       sudo service cron status"
 echo "  4. Test manually:                $PYTHON $PROJECT_DIR/daily_report.py"
 echo ""
 echo "Cron schedule (all times ET):"
-echo "  10:00  Mon-Fri  Morning screener report  → $PROJECT_DIR/cron.log"
+echo "  10:00  Mon-Fri  Paper trading report     → $PROJECT_DIR/cron.log"
+echo "  10:00  Mon-Fri  Real-trade report        → $PROJECT_DIR/real_report.log"
 echo "  16:30  Mon-Fri  Paper trading engine     → $PROJECT_DIR/paper_trading.log"
+echo ""
+echo "Google Sheets setup (for real_report.py):"
+echo "  1. Create GCP service account + download JSON → data/gcp_credentials.json"
+echo "  2. Share the Google Sheet with the service account email"
+echo "  3. Add GOOGLE_SHEET_ID=<id> to ~/.env  (from sheet URL: /d/<ID>/edit)"
+echo "  4. Sheet 'Traders' tab columns: name, email, tab, capital, monthly_target_pct"

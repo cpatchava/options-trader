@@ -126,3 +126,7 @@ EMAIL_RECIPIENT    = 'cpatchava@gmail.com'
 GMAIL_ADDRESS      = os.getenv('GMAIL_ADDRESS')
 GMAIL_APP_PASSWORD = os.getenv('GMAIL_APP_PASSWORD')
 REPORT_SEND_HOUR   = 8   # 8 AM local time
+
+# ── Google Sheets (real trade tracking) ────────────────────────────────────────
+# Sheet must be set to "Anyone with the link → Viewer"
+GOOGLE_SHEET_ID = os.getenv('GOOGLE_SHEET_ID', '1Qqrf5J9Pv_YLrMQ7PL7w9um7JiLOQ72QN0QmObv8x-s')
