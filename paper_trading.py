@@ -205,13 +205,21 @@ def open_new_positions(df: pd.DataFrame, candidates: list, today: date,
     open_tickers = set(
         df[(df['status'] == 'open') & (df['option_type'].isin(['put', 'shares']))]['ticker'].tolist()
     )
-    n_open = len(df[(df['status'] == 'open') & (df['option_type'] == 'put')])
+    # Shares from assignment still occupy a slot until sold
+    n_open = len(df[(df['status'] == 'open') & (df['option_type'].isin(['put', 'shares']))])
     slots_free = MAX_POSITIONS - n_open
 
     if slots_free <= 0:
         return df, ['All 5 slots occupied — no new positions opened']
 
-    slot_cash = portfolio_value * POSITION_SIZE_PCT
+    # Deduct capital already tied up in held shares from available cash
+    shares_df = df[(df['status'] == 'open') & (df['option_type'] == 'shares')]
+    shares_capital = sum(
+        float(r['strike']) * int(r['contracts']) * 100
+        for _, r in shares_df.iterrows()
+    )
+    available_cash = portfolio_value - shares_capital
+    slot_cash = available_cash * POSITION_SIZE_PCT
 
     for r in candidates:
         if slots_free <= 0:
@@ -261,11 +269,22 @@ def open_new_positions(df: pd.DataFrame, candidates: list, today: date,
 def _portfolio_value(df: pd.DataFrame, starting_capital: float) -> float:
     """
     Approximate current portfolio value:
-      starting capital + all realised P&L so far
-      (open positions are valued at their collateral, not marked to market)
+      starting capital + realised P&L + mark-to-market on held shares
     """
     realized = df[df['status'] == 'closed']['pnl'].sum() if not df.empty else 0
-    return starting_capital + (realized if not pd.isna(realized) else 0)
+    realized = realized if not pd.isna(realized) else 0
+
+    # Mark held shares at current price
+    shares_df = df[(df['status'] == 'open') & (df['option_type'] == 'shares')]
+    shares_mtm = 0.0
+    for _, row in shares_df.iterrows():
+        cur_px = _current_stock_price(row['ticker'])
+        if cur_px:
+            cost_basis = float(row['strike']) * int(row['contracts']) * 100
+            shares_mtm += (cur_px - float(row['strike'])) * int(row['contracts']) * 100
+            # capital is already accounted for in starting_capital — only add the unrealized gain/loss
+
+    return starting_capital + realized + shares_mtm
 
 
 # ── Summary printing ──────────────────────────────────────────────────────────
