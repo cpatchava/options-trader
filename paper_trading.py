@@ -335,9 +335,14 @@ def print_summary(df: pd.DataFrame, events: list[str], portfolio_value: float, t
                   f"basis ${basis:.2f}  current ${cur:.2f} ({pct:+.1f}%)  stop ${stop:.2f}")
 
     if not closed.empty:
+        completed  = closed[closed['close_type'] != 'assigned']
+        assigned_n = len(closed[closed['close_type'] == 'assigned'])
+        win = (completed['pnl'] > 0).sum() if not completed.empty else 0
+        total_c = len(completed)
+        pct = win / total_c * 100 if total_c else 0
+        assigned_note = f"  ({assigned_n} assigned/pending)" if assigned_n else ""
         print(f"\n  CLOSED TRADES ({len(closed)} total):")
-        win = (closed['pnl'] > 0).sum()
-        print(f"    Win rate: {win}/{len(closed)} ({win/len(closed)*100:.0f}%)")
+        print(f"    Win rate: {win}/{total_c} ({pct:.0f}%){assigned_note}")
 
     print(f"\n{'='*65}\n")
 
@@ -433,8 +438,10 @@ def _send_email_summary(df: pd.DataFrame, events: list[str],
     mtd = df[(df['status'] == 'closed') &
              (pd.to_datetime(df['close_date']) >= month_start)]['pnl'].sum()
     if pd.isna(mtd): mtd = 0
-    win = (closed['pnl'] > 0).sum() if not closed.empty else 0
-    total = len(closed)
+    completed  = closed[closed['close_type'] != 'assigned'] if not closed.empty else closed
+    assigned_n = len(closed[closed['close_type'] == 'assigned']) if not closed.empty else 0
+    win   = (completed['pnl'] > 0).sum() if not completed.empty else 0
+    total = len(completed)
 
     events_html = ''.join(f'<li>{e}</li>' for e in events) if events else '<li>No events today</li>'
 
@@ -485,7 +492,7 @@ def _send_email_summary(df: pd.DataFrame, events: list[str],
     <table><tr><td>Estimated value</td><td><b>${portfolio_value:,.0f}</b></td></tr>
     <tr><td>MTD realized P&L</td><td><b>${mtd:+,.0f}</b></td></tr>
     <tr><td>All-time P&L</td><td><b>${realized:+,.0f}</b></td></tr>
-    <tr><td>Win rate</td><td><b>{win}/{total}</b></td></tr></table>
+    <tr><td>Win rate</td><td><b>{win}/{total}</b>{f" · {assigned_n} assigned/pending" if assigned_n else ""}</td></tr></table>
 
     <h3>Open Positions — Live Pricing</h3>
     {live_table}

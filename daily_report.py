@@ -41,8 +41,11 @@ def build_report() -> tuple[str, str]:
     mtd = paper_df[(paper_df['status'] == 'closed') &
                    (pd.to_datetime(paper_df['close_date']) >= month_start)]['pnl'].sum()
     mtd        = float(mtd) if not pd.isna(mtd) else 0
-    total_cl   = len(paper_closed)
-    wins       = int((paper_closed['pnl'] > 0).sum()) if not paper_closed.empty else 0
+    # Exclude assigned trades from win rate — cycle isn't complete until shares resolve
+    completed  = paper_closed[paper_closed['close_type'] != 'assigned']
+    assigned_pending = len(paper_closed[paper_closed['close_type'] == 'assigned'])
+    total_cl   = len(completed)
+    wins       = int((completed['pnl'] > 0).sum()) if not completed.empty else 0
     win_rate   = round(wins / total_cl * 100, 1) if total_cl > 0 else 0.0
     open_count = len(paper_open) + len(paper_shares)  # shares occupy a slot
 
@@ -105,7 +108,7 @@ def build_report() -> tuple[str, str]:
   </div>
   <div class="metric">
     <div class="metric-val">{win_rate}%</div>
-    <div class="metric-lbl">Win Rate ({wins}/{total_cl})</div>
+    <div class="metric-lbl">Win Rate ({wins}/{total_cl}){f" · {assigned_pending} assigned" if assigned_pending else ""}</div>
   </div>
 </div>
 
