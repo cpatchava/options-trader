@@ -14,7 +14,7 @@ from email.mime.text import MIMEText
 
 from config import (
     STARTING_CAPITAL, TARGET_MONTHLY_RETURN, EMAIL_RECIPIENT,
-    GMAIL_ADDRESS, GMAIL_APP_PASSWORD, STOP_LOSS_PCT, MAX_POSITIONS,
+    GMAIL_ADDRESS, GMAIL_APP_PASSWORD, STOP_LOSS_PCT, MAX_POSITIONS, TICKER_SECTORS,
 )
 from screener import screen
 from portfolio import load_trades, open_positions, assigned_shares
@@ -35,6 +35,7 @@ def build_report() -> tuple[str, str]:
     # ── Paper trading metrics (source of truth) ────────────────────────────
     paper_df     = _load_paper_trades()
     paper_open   = paper_df[(paper_df['status'] == 'open') & (paper_df['option_type'] == 'put')]
+    paper_shares = paper_df[(paper_df['status'] == 'open') & (paper_df['option_type'] == 'shares')]
     paper_closed = paper_df[paper_df['status'] == 'closed']
     month_start  = pd.Timestamp(today.replace(day=1))
     mtd = paper_df[(paper_df['status'] == 'closed') &
@@ -43,7 +44,7 @@ def build_report() -> tuple[str, str]:
     total_cl   = len(paper_closed)
     wins       = int((paper_closed['pnl'] > 0).sum()) if not paper_closed.empty else 0
     win_rate   = round(wins / total_cl * 100, 1) if total_cl > 0 else 0.0
-    open_count = len(paper_open)
+    open_count = len(paper_open) + len(paper_shares)  # shares occupy a slot
 
     target_monthly = STARTING_CAPITAL * TARGET_MONTHLY_RETURN
     mtd_pct = (mtd / target_monthly * 100) if target_monthly else 0
@@ -51,7 +52,7 @@ def build_report() -> tuple[str, str]:
     subject = f"Options Report — {today.strftime('%a %b %d, %Y')} | MTD ${mtd:,.0f} / ${target_monthly:,.0f}"
 
     # ── Action items ───────────────────────────────────────────────────────
-    actions = _build_actions(open_pos, candidates, share_pos, paper_open)
+    actions = _build_actions(open_pos, candidates, share_pos, paper_open, paper_shares)
 
     html = f"""
 <!DOCTYPE html>
@@ -141,10 +142,44 @@ def build_report() -> tuple[str, str]:
     else:
         html += '<p><em>No open positions.</em></p>'
 
-    # ── Live paper position check ──────────────────────────────────────────
-    paper_df   = _load_paper_trades()
+    # ── Held shares ────────────────────────────────────────────────────────
+    if not paper_shares.empty:
+        import yfinance as yf
+        html += '<h3>HELD SHARES (Pending Covered Call)</h3>'
+        html += ('<table><tr><th>Ticker</th><th>Sector</th><th>Shares</th>'
+                 '<th>Cost Basis</th><th>Current Price</th><th>Unrealized P&L</th>'
+                 '<th>Stop Level</th><th>CC Eligible</th></tr>')
+        for _, row in paper_shares.iterrows():
+            tkr       = row['ticker']
+            basis     = float(row['strike'])
+            n_shares  = int(row['contracts']) * 100
+            sector    = TICKER_SECTORS.get(tkr, 'Other')
+            stop      = round(basis * (1 - STOP_LOSS_PCT), 2)
+            try:
+                cur_px = float(yf.Ticker(tkr).fast_info.last_price)
+                unreal = (cur_px - basis) * n_shares
+                unreal_str = f'<span class="{"green" if unreal >= 0 else "red"}">${unreal:+,.0f}</span>'
+                px_str = f'${cur_px:.2f}'
+                cc_ok  = cur_px >= basis
+                cc_str = ('<span class="green">Yes — write call ≥ $' + f'{basis:.0f}</span>'
+                          if cc_ok else f'No — ${basis - cur_px:.2f} below basis')
+            except Exception:
+                unreal_str = '—'
+                px_str     = 'N/A'
+                cc_str     = '—'
+            html += (f'<tr><td><b>{tkr}</b></td>'
+                     f'<td style="color:#7f8c8d;font-size:12px">{sector}</td>'
+                     f'<td>{n_shares}</td>'
+                     f'<td>${basis:.2f}</td>'
+                     f'<td>{px_str}</td>'
+                     f'<td>{unreal_str}</td>'
+                     f'<td>${stop:.2f}</td>'
+                     f'<td>{cc_str}</td></tr>\n')
+        html += '</table>'
+
+    # ── Live puts ──────────────────────────────────────────────────────────
     paper_puts = paper_df[(paper_df['status'] == 'open') & (paper_df['option_type'] == 'put')]
-    html += '<h3>OPEN PAPER POSITIONS — Live Pricing</h3>'
+    html += '<h3>OPEN PAPER PUTS — Live Pricing</h3>'
     html += build_live_positions_html(paper_puts, today)
 
     # ── New opportunities — best per sector ───────────────────────────────
@@ -205,7 +240,7 @@ def build_report() -> tuple[str, str]:
     return subject, html, candidates
 
 
-def _build_actions(open_pos_df, candidates, share_pos_df=None, paper_open_df=None) -> list:
+def _build_actions(open_pos_df, candidates, share_pos_df=None, paper_open_df=None, paper_shares_df=None) -> list:
     import yfinance as yf
     actions = []
     today = date.today()
@@ -288,7 +323,9 @@ def _build_actions(open_pos_df, candidates, share_pos_df=None, paper_open_df=Non
     # ── New opening opportunities ─────────────────────────────────────────
     paper_tickers = (set(paper_open_df['ticker'].tolist())
                      if paper_open_df is not None and not paper_open_df.empty else set())
-    slots_free = MAX_POSITIONS - len(paper_tickers)
+    share_tickers = (set(paper_shares_df['ticker'].tolist())
+                     if paper_shares_df is not None and not paper_shares_df.empty else set())
+    slots_free = MAX_POSITIONS - len(paper_tickers) - len(share_tickers)
     if slots_free > 0:
         for r in candidates[:3]:
             if r['ticker'] not in paper_tickers:
