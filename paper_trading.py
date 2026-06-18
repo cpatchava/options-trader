@@ -167,8 +167,9 @@ def manage_positions(df: pd.DataFrame, today: date) -> tuple[pd.DataFrame, list[
                 df.at[idx, 'status']        = 'closed'
                 events.append(f"50% TAKE  {ticker} {n}x${strike:.0f} put — closed @ ${cur_bid:.2f} for +${pnl:,.0f}")
 
-    # ── Open share positions (stop loss check) ───────────────────────────────
-    open_shares = df[(df['status'] == 'open') & (df['option_type'] == 'shares')].copy()
+    # ── Open share positions (profitable exit check + stop loss) ─────────────
+    open_shares   = df[(df['status'] == 'open') & (df['option_type'] == 'shares')].copy()
+    assigned_puts = df[df['close_type'] == 'assigned']
 
     for idx, row in open_shares.iterrows():
         ticker     = row['ticker']
@@ -179,6 +180,51 @@ def manage_positions(df: pd.DataFrame, today: date) -> tuple[pd.DataFrame, list[
         if cur_px is None:
             continue
 
+        # ── Profitable exit: total cycle P&L > 0 ──────────────────────────
+        put_match  = assigned_puts[assigned_puts['ticker'] == ticker]
+        put_pnl    = float(put_match['pnl'].iloc[0]) if not put_match.empty else 0.0
+
+        closed_cc  = df[(df['ticker'] == ticker) & (df['option_type'] == 'call') &
+                        (df['status'] == 'closed')]
+        cc_closed_pnl = float(closed_cc['pnl'].sum()) if not closed_cc.empty else 0.0
+
+        open_cc = df[(df['ticker'] == ticker) & (df['option_type'] == 'call') &
+                     (df['status'] == 'open')]
+        cc_buyback = 0.0
+        cc_idx     = None
+        if not open_cc.empty:
+            cc_row     = open_cc.iloc[0]
+            cc_idx     = open_cc.index[0]
+            cc_exp_str = str(cc_row['expiry'].date())
+            cc_bid     = _current_option_bid(ticker, cc_exp_str, float(cc_row['strike']), 'call')
+            if cc_bid is not None:
+                cc_buyback = cc_bid * 100 * n + COMMISSION * n * 2
+
+        share_pnl   = (cur_px - cost_basis) * 100 * n - COMMISSION * n * 2
+        cycle_pnl   = put_pnl + cc_closed_pnl - cc_buyback + share_pnl
+
+        if cycle_pnl > 0:
+            # Close open CC first (buy back)
+            if cc_idx is not None:
+                cc_buyback_pnl = -(cc_buyback)
+                df.at[cc_idx, 'close_date']    = pd.Timestamp(today)
+                df.at[cc_idx, 'close_premium'] = round(cc_bid, 2) if cc_bid else 0.0
+                df.at[cc_idx, 'close_type']    = 'cycle_exit'
+                df.at[cc_idx, 'pnl']           = round(
+                    (float(open_cc.iloc[0]['open_premium']) - (cc_bid or 0)) * 100 * n - COMMISSION * n * 2, 2)
+                df.at[cc_idx, 'status']        = 'closed'
+            # Close shares
+            df.at[idx, 'close_date']    = pd.Timestamp(today)
+            df.at[idx, 'close_premium'] = round(cur_px, 2)
+            df.at[idx, 'close_type']    = 'cycle_exit'
+            df.at[idx, 'pnl']           = round(share_pnl, 2)
+            df.at[idx, 'status']        = 'closed'
+            events.append(f"CYCLE EXIT {ticker} — sold {n*100} shares @ ${cur_px:.2f}  "
+                          f"full cycle P&L ${cycle_pnl:+,.0f}  "
+                          f"(put ${put_pnl:+,.0f} + CC ${cc_closed_pnl:+,.0f} + shares ${share_pnl:+,.0f})")
+            continue
+
+        # ── Stop loss ─────────────────────────────────────────────────────
         if cur_px <= stop_level:
             loss = (cur_px - cost_basis) * 100 * n - COMMISSION * n * 2
             df.at[idx, 'close_date']    = pd.Timestamp(today)
@@ -190,7 +236,6 @@ def manage_positions(df: pd.DataFrame, today: date) -> tuple[pd.DataFrame, list[
 
     # ── Open covered calls (50% take or expiry/assignment) ───────────────────
     open_calls = df[(df['status'] == 'open') & (df['option_type'] == 'call')].copy()
-    assigned_puts = df[df['close_type'] == 'assigned']
 
     for idx, row in open_calls.iterrows():
         ticker     = row['ticker']
