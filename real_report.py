@@ -247,51 +247,89 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
                      f'<td>{_notes(row)}</td></tr>\n')
         html += '</table>\n'
 
+    # ── Roll opportunities (screener hits existing open puts) ─────────────
+    put_tickers = set(open_puts['ticker'].astype(str).tolist()) if not open_puts.empty else set()
+    roll_tickers = {r['ticker'] for r in candidates if r['ticker'] in put_tickers}
+
+    if roll_tickers:
+        rolls = _build_roll_analysis(open_puts, candidates)
+        if rolls:
+            html += '<h3>ROLL OPPORTUNITIES</h3>\n'
+            html += ('<table><tr>'
+                     '<th>Ticker</th>'
+                     '<th>Current position</th><th>Close ask</th>'
+                     '<th>→ New position</th><th>New bid</th>'
+                     '<th>Net/ct</th><th>DTE gain</th><th>Verdict</th>'
+                     '</tr>\n')
+            for roll in rolls:
+                cur_label = f"{roll['cur_expiry'][5:]} ${roll['cur_strike']:.2f}P"
+                new_label = f"{roll['new_expiry'][5:]} ${roll['new_strike']:.2f}P"
+                ask_str   = f"${roll['cur_ask']:.2f}" if roll['cur_ask'] is not None else 'N/A'
+                if roll['net_credit'] is not None:
+                    net_str   = f"${roll['net_credit']:+.0f}"
+                    net_cls   = 'green' if roll['net_credit'] >= 0 else 'red'
+                    verdict, v_cls = _roll_verdict(roll)
+                else:
+                    net_str = '—'
+                    net_cls = ''
+                    verdict, v_cls = 'Check live quote', 'orange'
+                dte_str = f"+{roll['dte_gain']}d" if roll['dte_gain'] > 0 else f"{roll['dte_gain']}d"
+                html += (f'<tr>'
+                         f'<td><b>{roll["ticker"]}</b></td>'
+                         f'<td style="color:#7f8c8d">{cur_label} ({roll["cur_dte"]}d left)</td>'
+                         f'<td>{ask_str}</td>'
+                         f'<td>{new_label}</td>'
+                         f'<td>${roll["new_bid"]:.2f}</td>'
+                         f'<td class="{net_cls}">{net_str}</td>'
+                         f'<td>{dte_str}</td>'
+                         f'<td class="{v_cls}"><b>{verdict}</b></td>'
+                         f'</tr>\n')
+            html += '</table>\n'
+
     # ── New opportunities ──────────────────────────────────────────────────
     html += '<h3>NEW OPPORTUNITIES — Best per Sector</h3>\n'
     if candidates:
-        open_tickers = set()
-        if not open_puts.empty:
-            open_tickers |= set(open_puts['ticker'].astype(str).tolist())
-        if not open_shares.empty:
-            open_tickers |= set(open_shares['ticker'].astype(str).tolist())
+        share_tickers = set(open_shares['ticker'].astype(str).tolist()) if not open_shares.empty else set()
+        held_tickers  = put_tickers | share_tickers
 
-        # top 3 per sector
+        # top 3 per sector, excluding tickers already in roll section or held as shares
         sector_counts: dict = {}
         sector_best = []
         for r in candidates:
+            if r['ticker'] in held_tickers:
+                continue
             s = r.get('sector', 'Other')
             if sector_counts.get(s, 0) < 3:
                 sector_counts[s] = sector_counts.get(s, 0) + 1
                 sector_best.append(r)
 
-        html += ('<table><tr><th>Sector</th><th>Ticker</th><th>Held?</th>'
-                 '<th>Price</th><th>IVR</th><th>IV</th>'
-                 '<th>Strike</th><th>Bid</th><th>Delta</th>'
-                 '<th>Yield</th><th>Ann Yld</th><th>Expiry</th>'
-                 '<th>DTE</th><th>Earnings</th></tr>\n')
-        for r in sector_best:
-            ivr_color  = 'green' if r['iv_rank'] >= 50 else 'orange' if r['iv_rank'] >= 30 else 'red'
-            earn_str   = f"{r['earnings_in']}d" if r.get('earnings_in') is not None else '—'
-            held       = '✓ open' if r['ticker'] in open_tickers else '—'
-            held_style = 'color:#e67e22;font-weight:bold' if held != '—' else 'color:#7f8c8d'
-            html += (f'<tr>'
-                     f'<td style="color:#7f8c8d;font-size:12px">{r.get("sector","Other")}</td>'
-                     f'<td><b>{r["ticker"]}</b></td>'
-                     f'<td style="{held_style}">{held}</td>'
-                     f'<td>${r["price"]:.2f}</td>'
-                     f'<td class="{ivr_color}">{r["iv_rank"]:.0f}</td>'
-                     f'<td>{r["iv_pct"]}%</td>'
-                     f'<td>${r["put_strike"]}</td>'
-                     f'<td>${r["put_bid"]}</td>'
-                     f'<td>Δ{r["put_delta"]}</td>'
-                     f'<td>{r["put_yield_pct"]}%</td>'
-                     f'<td>{r["put_ann_yield"]}%</td>'
-                     f'<td>{r["expiry"]}</td>'
-                     f'<td>{r["dte"]}</td>'
-                     f'<td>{earn_str}</td>'
-                     f'</tr>\n')
-        html += '</table>\n'
+        if sector_best:
+            html += ('<table><tr><th>Sector</th><th>Ticker</th>'
+                     '<th>Price</th><th>IVR</th><th>IV</th>'
+                     '<th>Strike</th><th>Bid</th><th>Delta</th>'
+                     '<th>Yield</th><th>Ann Yld</th><th>Expiry</th>'
+                     '<th>DTE</th><th>Earnings</th></tr>\n')
+            for r in sector_best:
+                ivr_color = 'green' if r['iv_rank'] >= 50 else 'orange' if r['iv_rank'] >= 30 else 'red'
+                earn_str  = f"{r['earnings_in']}d" if r.get('earnings_in') is not None else '—'
+                html += (f'<tr>'
+                         f'<td style="color:#7f8c8d;font-size:12px">{r.get("sector","Other")}</td>'
+                         f'<td><b>{r["ticker"]}</b></td>'
+                         f'<td>${r["price"]:.2f}</td>'
+                         f'<td class="{ivr_color}">{r["iv_rank"]:.0f}</td>'
+                         f'<td>{r["iv_pct"]}%</td>'
+                         f'<td>${r["put_strike"]}</td>'
+                         f'<td>${r["put_bid"]}</td>'
+                         f'<td>Δ{r["put_delta"]}</td>'
+                         f'<td>{r["put_yield_pct"]}%</td>'
+                         f'<td>{r["put_ann_yield"]}%</td>'
+                         f'<td>{r["expiry"]}</td>'
+                         f'<td>{r["dte"]}</td>'
+                         f'<td>{earn_str}</td>'
+                         f'</tr>\n')
+            html += '</table>\n'
+        else:
+            html += '<p><em>All screener candidates are tickers you already hold.</em></p>\n'
     else:
         html += '<p><em>No screener candidates today (market closed or data unavailable).</em></p>\n'
 
@@ -305,6 +343,87 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
 </html>"""
 
     return subject, html
+
+
+def _build_roll_analysis(open_puts, candidates) -> list:
+    """For each candidate that matches an open put, fetch current ask and compute roll economics."""
+    import yfinance as yf
+    import pandas as pd
+
+    open_by_ticker = {}
+    for _, row in open_puts.iterrows():
+        tkr = str(row.get('ticker', ''))
+        open_by_ticker[tkr] = row
+
+    candidate_by_ticker = {r['ticker']: r for r in candidates}
+
+    rolls = []
+    for tkr, current in open_by_ticker.items():
+        if tkr not in candidate_by_ticker:
+            continue
+        r = candidate_by_ticker[tkr]
+
+        cur_strike    = float(current.get('strike', 0))
+        cur_expiry    = current.get('expiry')
+        cur_contracts = int(current.get('contracts', 1) or 1)
+        cur_premium   = float(current.get('premium', 0) or 0)
+
+        try:
+            exp_str = cur_expiry.strftime('%Y-%m-%d') if hasattr(cur_expiry, 'strftime') else str(cur_expiry)[:10]
+            chain   = yf.Ticker(tkr).option_chain(exp_str)
+            match   = chain.puts[abs(chain.puts['strike'] - cur_strike) < 0.01]
+            cur_ask = float(match['ask'].iloc[0]) if not match.empty else None
+        except Exception:
+            exp_str = str(cur_expiry)[:10] if cur_expiry else ''
+            cur_ask = None
+
+        cur_dte = max(0, (pd.Timestamp(exp_str) - pd.Timestamp.today()).days) if exp_str else 0
+
+        new_strike = float(r['put_strike'])
+        new_bid    = float(r['put_bid'])
+
+        net_credit = round((new_bid - cur_ask) * 100 * cur_contracts, 2) if cur_ask is not None else None
+
+        rolls.append({
+            'ticker':      tkr,
+            'cur_strike':  cur_strike,
+            'cur_expiry':  exp_str,
+            'cur_dte':     cur_dte,
+            'cur_premium': cur_premium,
+            'cur_ask':     cur_ask,
+            'new_strike':  new_strike,
+            'new_expiry':  r['expiry'],
+            'new_dte':     r['dte'],
+            'new_bid':     new_bid,
+            'contracts':   cur_contracts,
+            'net_credit':  net_credit,
+            'dte_gain':    r['dte'] - cur_dte,
+            'strike_change': new_strike - cur_strike,
+        })
+
+    return rolls
+
+
+def _roll_verdict(roll: dict) -> tuple[str, str]:
+    """Return (verdict text, css class) for a roll."""
+    net = roll['net_credit']
+    dte_gain = roll['dte_gain']
+    strike_ch = roll['strike_change']
+
+    if net is None:
+        return 'Check live quote', 'orange'
+
+    if net >= 0 and dte_gain > 0:
+        extra = f" + lower strike ${roll['new_strike']:.0f}" if strike_ch < 0 else ''
+        return f'Roll — free extension{extra}', 'green'
+    elif net >= 0 and strike_ch < 0:
+        return f'Roll down ${abs(strike_ch):.2f} for net credit', 'green'
+    elif net < 0 and dte_gain >= 14 and abs(net) < 50 * roll['contracts']:
+        return f'Roll costs ${abs(net):.0f} — reasonable for +{dte_gain}d', 'orange'
+    elif net < 0:
+        return f'Skip — costs ${abs(net):.0f} to roll', 'red'
+    else:
+        return 'Evaluate', 'orange'
 
 
 def _notes(row) -> str:
