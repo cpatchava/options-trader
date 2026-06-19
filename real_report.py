@@ -24,7 +24,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from config import (
-    GMAIL_ADDRESS, GMAIL_APP_PASSWORD, STOP_LOSS_PCT, TICKER_SECTORS,
+    GMAIL_ADDRESS, GMAIL_APP_PASSWORD, STOP_LOSS_PCT, TICKER_SECTORS, GOOGLE_SHEET_ID,
 )
 from screener import screen
 from utils.gsheets import get_traders, get_trades, compute_metrics
@@ -102,6 +102,14 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
 <body>
 
 <h2>Options Daily Report &nbsp;·&nbsp; {name} &nbsp;·&nbsp; {today.strftime('%B %d, %Y')}</h2>
+
+<p style="margin:4px 0 16px">
+  <a href="https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/edit"
+     style="background:#3498db;color:white;padding:7px 16px;border-radius:4px;
+            text-decoration:none;font-size:13px;font-weight:bold;">
+    &#128196; Open Trade Sheet
+  </a>
+</p>
 
 <div>
   <div class="metric">
