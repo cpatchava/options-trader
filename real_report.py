@@ -222,6 +222,7 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
 
     if not open_puts.empty:
         rolls = _build_roll_analysis(open_puts)
+        rolls = [r for r in rolls if r['net_credit'] is None or r['net_credit'] >= 0]
         if rolls:
             html += '<h3>ROLL OPPORTUNITIES</h3>\n'
             html += ('<table><tr>'
