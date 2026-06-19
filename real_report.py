@@ -217,12 +217,11 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
         html += '<h3>OPEN PUTS — Live Pricing</h3>\n'
         html += _live_options_table(open_puts, today, 'put')
 
-    # ── Roll opportunities (screener hits existing open puts) ─────────────
+    # ── Roll opportunities — checked for all open puts ─────────────────────
     put_tickers = set(open_puts['ticker'].astype(str).tolist()) if not open_puts.empty else set()
-    roll_tickers = {r['ticker'] for r in candidates if r['ticker'] in put_tickers}
 
-    if roll_tickers:
-        rolls = _build_roll_analysis(open_puts, candidates)
+    if not open_puts.empty:
+        rolls = _build_roll_analysis(open_puts)
         if rolls:
             html += '<h3>ROLL OPPORTUNITIES</h3>\n'
             html += ('<table><tr>'
@@ -402,23 +401,19 @@ def _live_options_table(df, today, option_type: str) -> str:
     return header + rows + '</table>\n'
 
 
-def _build_roll_analysis(open_puts, candidates) -> list:
-    """For each candidate that matches an open put, fetch current ask and compute roll economics."""
+def _build_roll_analysis(open_puts) -> list:
+    """For every open put, find a 21-45 DTE expiry via yfinance and compute roll economics."""
     import yfinance as yf
     import pandas as pd
+    from datetime import date, timedelta
 
-    open_by_ticker = {}
-    for _, row in open_puts.iterrows():
-        tkr = str(row.get('ticker', ''))
-        open_by_ticker[tkr] = row
-
-    candidate_by_ticker = {r['ticker']: r for r in candidates}
+    today = date.today()
 
     rolls = []
-    for tkr, current in open_by_ticker.items():
-        if tkr not in candidate_by_ticker:
+    for _, current in open_puts.iterrows():
+        tkr = str(current.get('ticker', ''))
+        if not tkr:
             continue
-        r = candidate_by_ticker[tkr]
 
         cur_strike    = float(current.get('strike', 0))
         cur_expiry    = current.get('expiry')
@@ -427,34 +422,72 @@ def _build_roll_analysis(open_puts, candidates) -> list:
 
         try:
             exp_str = cur_expiry.strftime('%Y-%m-%d') if hasattr(cur_expiry, 'strftime') else str(cur_expiry)[:10]
+        except Exception:
+            exp_str = ''
+
+        cur_dte = max(0, (pd.Timestamp(exp_str) - pd.Timestamp.today()).days) if exp_str else 0
+
+        # Get current ask to close existing position
+        try:
             chain   = yf.Ticker(tkr).option_chain(exp_str)
             match   = chain.puts[abs(chain.puts['strike'] - cur_strike) < 0.01]
             cur_ask = float(match['ask'].iloc[0]) if not match.empty else None
         except Exception:
-            exp_str = str(cur_expiry)[:10] if cur_expiry else ''
             cur_ask = None
 
-        cur_dte = max(0, (pd.Timestamp(exp_str) - pd.Timestamp.today()).days) if exp_str else 0
+        # Find nearest expiry in the 21-45 DTE window
+        try:
+            ticker_obj  = yf.Ticker(tkr)
+            expirations = ticker_obj.options
 
-        new_strike = float(r['put_strike'])
-        new_bid    = float(r['put_bid'])
+            target_exp = None
+            target_dte = None
+            for exp in expirations:
+                try:
+                    exp_date = date.fromisoformat(exp)
+                    dte = (exp_date - today).days
+                    if 21 <= dte <= 45:
+                        if target_exp is None or dte < target_dte:
+                            target_exp = exp
+                            target_dte = dte
+                except Exception:
+                    continue
+
+            if target_exp is None:
+                continue
+
+            # Find nearest strike in the new chain
+            new_chain = ticker_obj.option_chain(target_exp)
+            puts = new_chain.puts.copy()
+            if puts.empty:
+                continue
+
+            puts['_diff'] = abs(puts['strike'] - cur_strike)
+            best       = puts.nsmallest(1, '_diff').iloc[0]
+            new_strike = float(best['strike'])
+            new_bid    = float(best['bid'])
+            if new_bid <= 0:
+                new_bid = float(best.get('ask', 0) or 0) / 2
+
+        except Exception:
+            continue
 
         net_credit = round((new_bid - cur_ask) * 100 * cur_contracts, 2) if cur_ask is not None else None
 
         rolls.append({
-            'ticker':      tkr,
-            'cur_strike':  cur_strike,
-            'cur_expiry':  exp_str,
-            'cur_dte':     cur_dte,
-            'cur_premium': cur_premium,
-            'cur_ask':     cur_ask,
-            'new_strike':  new_strike,
-            'new_expiry':  r['expiry'],
-            'new_dte':     r['dte'],
-            'new_bid':     new_bid,
-            'contracts':   cur_contracts,
-            'net_credit':  net_credit,
-            'dte_gain':    r['dte'] - cur_dte,
+            'ticker':        tkr,
+            'cur_strike':    cur_strike,
+            'cur_expiry':    exp_str,
+            'cur_dte':       cur_dte,
+            'cur_premium':   cur_premium,
+            'cur_ask':       cur_ask,
+            'new_strike':    new_strike,
+            'new_expiry':    target_exp,
+            'new_dte':       target_dte,
+            'new_bid':       new_bid,
+            'contracts':     cur_contracts,
+            'net_credit':    net_credit,
+            'dte_gain':      target_dte - cur_dte,
             'strike_change': new_strike - cur_strike,
         })
 
