@@ -326,12 +326,24 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
 def _current_option_bid(ticker: str, expiry_str: str, strike: float, option_type: str = 'put'):
     try:
         import yfinance as yf
-        chain = yf.Ticker(ticker).option_chain(expiry_str)
+        from datetime import date as _date
+        t = yf.Ticker(ticker)
+        available = t.options
+
+        # Fuzzy match expiry: accept exact or within ±3 days
+        if expiry_str not in available and available:
+            target  = _date.fromisoformat(expiry_str)
+            closest = min(available, key=lambda e: abs((_date.fromisoformat(e) - target).days))
+            if abs((_date.fromisoformat(closest) - target).days) <= 3:
+                expiry_str = closest
+            else:
+                return None
+
+        chain = t.option_chain(expiry_str)
         opts  = chain.puts if option_type == 'put' else chain.calls
         row   = opts[abs(opts['strike'] - strike) < 0.01]
         if not row.empty:
-            bid = float(row['bid'].iloc[0])
-            return bid if bid > 0 else None
+            return float(row['bid'].iloc[0])  # 0.0 is valid — don't collapse to None
     except Exception:
         pass
     return None
@@ -379,16 +391,21 @@ def _live_options_table(df, today, option_type: str) -> str:
                      if cur_stock else '—')
 
         if cur_bid is not None:
-            decayed_pct = (open_prem - cur_bid) / open_prem * 100 if open_prem else 0
-            if decayed_pct >= 50:
-                decay_color, decay_label = '#27ae60', f'{decayed_pct:.0f}% ✓ TAKE'
-            elif decayed_pct >= 30:
-                decay_color, decay_label = '#e67e22', f'{decayed_pct:.0f}%'
+            if cur_bid == 0:
+                decay_color, decay_label = '#27ae60', '~100% ✓ TAKE'
+                bid_str  = '$0.00'
+                dist_str = '→ TAKE NOW'
             else:
-                decay_color, decay_label = '#555', f'{decayed_pct:.0f}%'
-            distance = cur_bid - take_target
-            dist_str = '→ TAKE NOW' if distance <= 0 else f'${distance:.2f} away'
-            bid_str  = f'${cur_bid:.2f}'
+                decayed_pct = (open_prem - cur_bid) / open_prem * 100 if open_prem else 0
+                if decayed_pct >= 50:
+                    decay_color, decay_label = '#27ae60', f'{decayed_pct:.0f}% ✓ TAKE'
+                elif decayed_pct >= 30:
+                    decay_color, decay_label = '#e67e22', f'{decayed_pct:.0f}%'
+                else:
+                    decay_color, decay_label = '#555', f'{decayed_pct:.0f}%'
+                distance = cur_bid - take_target
+                dist_str = '→ TAKE NOW' if distance <= 0 else f'${distance:.2f} away'
+                bid_str  = f'${cur_bid:.2f}'
         else:
             decay_color, decay_label = '#999', 'N/A'
             bid_str, dist_str = 'N/A', '—'
