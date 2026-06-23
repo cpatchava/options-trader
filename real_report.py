@@ -323,7 +323,8 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
     return subject, html
 
 
-def _current_option_bid(ticker: str, expiry_str: str, strike: float, option_type: str = 'put'):
+def _current_option_ask(ticker: str, expiry_str: str, strike: float, option_type: str = 'put'):
+    """Return the current ask (cost to buy back / close a short position)."""
     try:
         import yfinance as yf
         from datetime import date as _date
@@ -343,7 +344,7 @@ def _current_option_bid(ticker: str, expiry_str: str, strike: float, option_type
         opts  = chain.puts if option_type == 'put' else chain.calls
         row   = opts[abs(opts['strike'] - strike) < 0.01]
         if not row.empty:
-            return float(row['bid'].iloc[0])  # 0.0 is valid — don't collapse to None
+            return float(row['ask'].iloc[0])  # ask = what you pay to close a short
     except Exception:
         pass
     return None
@@ -364,7 +365,7 @@ def _live_options_table(df, today, option_type: str) -> str:
         'style="border-collapse:collapse;width:100%;font-size:13px">'
         '<tr style="background:#2c3e50;color:white">'
         '<th>Ticker</th><th>Sector</th><th>Position</th>'
-        '<th>Stock (vs strike)</th><th>Opened @</th><th>Current Bid</th>'
+        '<th>Stock (vs strike)</th><th>Opened @</th><th>Close Ask</th>'
         '<th>Decayed</th><th>50% Take @</th><th>Distance</th><th>DTE</th>'
         '</tr>\n'
     )
@@ -384,7 +385,7 @@ def _live_options_table(df, today, option_type: str) -> str:
 
         take_target = round(open_prem * PROFIT_TAKE_PCT, 2)
         cur_stock   = _current_stock_price(tkr)
-        cur_bid     = _current_option_bid(tkr, exp_str, strike, option_type)
+        cur_bid     = _current_option_ask(tkr, exp_str, strike, option_type)
 
         stock_str = f'${cur_stock:.2f}' if cur_stock else 'N/A'
         pct_from  = (f'{(cur_stock - strike) / cur_stock * 100:+.1f}%'
