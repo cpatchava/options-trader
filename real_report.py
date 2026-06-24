@@ -598,6 +598,37 @@ def _build_actions(open_puts, open_shares, open_calls, candidates, max_slots) ->
             except Exception:
                 pass
 
+    # ── ITM assignment prep alerts for open puts ──────────────────────────
+    if not open_puts.empty:
+        for _, row in open_puts.iterrows():
+            tkr    = str(row.get('ticker', ''))
+            strike = float(row.get('strike', 0) or 0)
+            n      = int(row.get('contracts', 1) or 1)
+            exp    = row.get('expiry')
+            if not tkr or not strike:
+                continue
+            exp_date = exp.date() if hasattr(exp, 'date') else date.fromisoformat(str(exp)[:10])
+            dte      = (exp_date - today).days
+            try:
+                cur_px     = float(yf.Ticker(tkr).fast_info.last_price)
+                itm_amt    = strike - cur_px
+                itm_pct    = itm_amt / strike * 100
+                collateral = strike * 100 * n
+                if itm_amt > 0:
+                    actions.append({
+                        'type': 'monitor',
+                        'description': (
+                            f"📋 <b>Assignment prep — {tkr}</b>: "
+                            f"stock ${cur_px:.2f} is ${itm_amt:.2f} below your ${strike:.2f} strike "
+                            f"({itm_pct:.1f}% ITM, {dte} DTE). "
+                            f"Likely assigned {n * 100} shares at ${strike:.2f} "
+                            f"(${collateral:,.0f} collateral). "
+                            f"Plan a covered call at ${strike:.2f} to sell after assignment."
+                        ),
+                    })
+            except Exception:
+                pass
+
     # ── Expiry alerts ──────────────────────────────────────────────────────
     for df_part in [open_puts, open_calls]:
         if df_part.empty:
