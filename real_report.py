@@ -614,7 +614,7 @@ def _build_actions(open_puts, open_shares, open_calls, candidates, max_slots) ->
                 itm_amt    = strike - cur_px
                 itm_pct    = itm_amt / strike * 100
                 collateral = strike * 100 * n
-                if itm_amt > 0:
+                if itm_amt > 0 and dte <= 7:
                     actions.append({
                         'type': 'monitor',
                         'description': (
