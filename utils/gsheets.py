@@ -93,9 +93,13 @@ def compute_metrics(df: pd.DataFrame, capital: float, monthly_target_pct: float)
     open_df = df[df['status'] == 'open'].copy()
 
     def _pnl(row):
-        n  = int(row.get('contracts', 1) or 1)
-        op = float(row.get('premium', 0) or 0)
-        cp = float(row.get('close_price', 0) or 0)
+        n      = int(row.get('contracts', 1) or 1)
+        op     = float(row.get('premium', 0) or 0)
+        cp     = float(row.get('close_price', 0) or 0)
+        t      = str(row.get('type', '')).lower().strip()
+        if t == 'shares':
+            # shares: P&L = (sale price - cost basis) * share count, no ×100
+            return (cp - op) * n
         return (op - cp) * 100 * n - COMMISSION * n * 2
 
     if not closed.empty:
