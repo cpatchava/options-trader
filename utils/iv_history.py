@@ -54,55 +54,83 @@ def _save(df: pd.DataFrame):
     _cache = df
 
 
+def _hv30(ticker: str) -> float | None:
+    """30-day realized volatility from daily close prices."""
+    try:
+        hist = yf.Ticker(ticker).history(period='45d')
+        if len(hist) < 20:
+            return None
+        returns = np.log(hist['Close'] / hist['Close'].shift(1)).dropna()
+        return float(returns.std() * np.sqrt(252))
+    except Exception:
+        return None
+
+
+def _atm_iv_for_expiry(puts: 'pd.DataFrame', S: float) -> float | None:
+    """Mean near-ATM put IV for a given chain."""
+    ntm = puts[(puts['strike'] >= S * 0.90) & (puts['strike'] <= S * 1.10)]
+    if ntm.empty:
+        ntm = puts
+    iv_vals = ntm['impliedVolatility'].dropna()
+    iv_vals = iv_vals[(iv_vals > 0.01) & (iv_vals < 5.0)]
+    return float(iv_vals.mean()) if not iv_vals.empty else None
+
+
 def _fetch_atm_iv(ticker: str, today: date) -> float | None:
     """
-    Fetch ATM put implied volatility from yfinance for the expiry
-    closest to 30 DTE (must be 14-50 DTE).
-    Returns the mean IV of near-ATM puts, or None on failure.
+    Fetch ATM put IV with two-layer validation:
+      1. Cross-expiry check — fetch ~21 DTE and ~42 DTE, use average if they
+         agree within 40%; if one is near-zero and the other is normal, use
+         the higher one.
+      2. HV floor — if the result is below 70% of 30-day realized vol, it's
+         a bad market-open read; return None so yesterday's value is kept.
     """
     try:
-        t = yf.Ticker(ticker)
+        t    = yf.Ticker(ticker)
         exps = t.options
         if not exps:
             return None
 
-        # Pick the expiry closest to 30 DTE in the 14-50 day window
-        target_exp = None
-        best_gap = 999
-        for exp_str in exps:
-            exp = date.fromisoformat(exp_str)
-            dte = (exp - today).days
-            if 14 <= dte <= 50:
-                gap = abs(dte - 30)
-                if gap < best_gap:
-                    best_gap = gap
-                    target_exp = (exp_str, dte)
-
-        if target_exp is None:
-            return None
-
-        exp_str, dte = target_exp
-        chain = t.option_chain(exp_str)
-        puts = chain.puts
-        if puts.empty:
-            return None
-
-        # Current price
         S = float(t.fast_info.last_price)
         if S <= 0:
             return None
 
-        # Near-ATM puts: strike within 10% of spot
-        ntm = puts[(puts['strike'] >= S * 0.90) & (puts['strike'] <= S * 1.10)]
-        if ntm.empty:
-            ntm = puts  # fallback: use all puts
+        # Find up to two expiries: closest to 21 DTE and closest to 42 DTE
+        def _pick_exp(target_dte: int):
+            best, best_gap = None, 999
+            for exp_str in exps:
+                dte = (date.fromisoformat(exp_str) - today).days
+                if 14 <= dte <= 55:
+                    gap = abs(dte - target_dte)
+                    if gap < best_gap:
+                        best_gap = gap
+                        best = exp_str
+            return best
 
-        iv_vals = ntm['impliedVolatility'].dropna()
-        iv_vals = iv_vals[(iv_vals > 0.01) & (iv_vals < 5.0)]
-        if iv_vals.empty:
+        exp_near = _pick_exp(21)
+        exp_far  = _pick_exp(42)
+
+        iv_near = _atm_iv_for_expiry(t.option_chain(exp_near).puts, S) if exp_near else None
+        iv_far  = _atm_iv_for_expiry(t.option_chain(exp_far).puts,  S) if exp_far  else None
+
+        # Cross-expiry reconciliation
+        if iv_near is not None and iv_far is not None:
+            ratio = min(iv_near, iv_far) / max(iv_near, iv_far)
+            if ratio >= 0.60:
+                iv = (iv_near + iv_far) / 2        # agree — average them
+            else:
+                iv = max(iv_near, iv_far)           # diverge — use the higher (garbage tends to be low)
+        else:
+            iv = iv_near or iv_far
+            if iv is None:
+                return None
+
+        # HV floor: IV < 70% of realized vol is almost certainly a bad read
+        hv = _hv30(ticker)
+        if hv is not None and iv < hv * 0.70:
             return None
 
-        return float(iv_vals.mean())
+        return iv
 
     except Exception:
         return None
