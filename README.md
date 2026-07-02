@@ -5,7 +5,10 @@ An automated wheel strategy system for selling cash-secured puts on S&P 500 stoc
 ## What it does
 
 Every trading day:
-- **8:00 AM ET** — scans 85 tickers for elevated implied volatility, scores candidates by IV Rank and annualised yield, emails a ranked shortlist
+- **10:00 AM ET** — scans 85 tickers for elevated implied volatility, scores candidates by IV Rank and annualised yield, emails a ranked shortlist (paper trading)
+- **10:30 AM ET** — reads real trades from Google Sheets, shows open positions with close costs, roll opportunities, and ITM assignment alerts; emails a real-portfolio report
+- **12:00 PM ET** — refreshes today's IV readings for all watchlist tickers (replaces early-morning data that can be thin)
+- **3:00 PM ET** — second IV refresh to capture mid/late-day option pricing
 - **4:30 PM ET** — manages open paper positions (profit takes, expiries, stop losses), opens new positions from the screener, emails an end-of-day portfolio snapshot
 
 ## Strategy in one sentence
@@ -60,16 +63,21 @@ The setup script sets the timezone to America/New_York, creates a Python venv, i
 
 ```
 options-trader/
-├── config.py               # all tuneable parameters in one place
+├── config.py               # all tuneable parameters + GOOGLE_SHEET_ID
 ├── screener.py             # daily options screener
-├── daily_report.py         # morning email report
+├── daily_report.py         # morning email report (paper trading)
+├── real_report.py          # morning email report (real trades from Google Sheets)
 ├── paper_trading.py        # end-of-day paper trading engine
+├── update_iv.py            # standalone IV refresh (run multiple times/day)
 ├── utils/
 │   ├── bsm.py              # Black-Scholes-Merton pricing and Greeks
 │   ├── data_fetcher.py     # yfinance price helpers
-│   └── iv_history.py       # 52-week IV history store
-├── run_report.sh           # cron wrapper — morning
+│   ├── gsheets.py          # Google Sheets reader + P&L calculator
+│   └── iv_history.py       # 52-week IV history store with cross-expiry validation
+├── run_report.sh           # cron wrapper — paper morning
+├── run_real_report.sh      # cron wrapper — real morning
 ├── run_paper_trading.sh    # cron wrapper — evening
+├── run_update_iv.sh        # cron wrapper — IV refresh (noon + 3 PM)
 ├── setup_pi.sh             # one-shot Raspberry Pi setup
 ├── data/
 │   ├── iv_history.csv      # accumulated daily IV readings (not in git)

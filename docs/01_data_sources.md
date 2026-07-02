@@ -42,6 +42,34 @@ date,       ticker, iv,     source
 
 Bootstrapped from ORATS on day one (137,000 readings, 87 tickers). After 252 trading days of live yfinance readings the store is fully self-contained.
 
+### IV fetch with two-layer validation
+
+Early-morning option quotes are often thin or zero. `update()` is called multiple times per day (noon and 3 PM via cron) and **overwrites** today's stored value each run, so the latest mid/late-day read wins.
+
+Each fetch uses two validation layers before accepting a reading:
+
+1. **Cross-expiry check** — fetch ATM IV for the nearest ~21 DTE and ~42 DTE expiries. If they agree within 40%, average them. If one is near-zero and the other is normal, use the higher (bad reads are almost always near-zero). This catches the case where a single expiry has thin quoting.
+
+2. **HV floor** — compute 30-day realized volatility (HV30) from the past 45 days of daily closes. If the candidate IV is below 70% of HV30, reject it. IV should structurally exceed realized vol (volatility risk premium); a reading below that floor is almost certainly a bad early-morning data point.
+
+If a reading is rejected, the ticker's previous value is kept unchanged for the day.
+
+### `update_iv.py` — standalone refresh
+
+Run via `run_update_iv.sh` by cron at noon and 3 PM ET. Fetches IV for the full watchlist and overwrites any today rows for successfully-fetched tickers. Logs to `iv_update.log`.
+
+## Google Sheets — real trades
+
+`utils/gsheets.py` reads real trade data from a public Google Sheet (no credentials needed — sheet must be set to "Anyone with the link → Viewer"). The sheet ID is configured in `config.py` as `GOOGLE_SHEET_ID`.
+
+Sheet structure:
+- **Traders** tab — one row per trader with: `name`, `email`, `tab`, `capital`, `monthly_target_pct`
+- **Per-trader tabs** — each row is a trade: `open_date`, `ticker`, `type` (put/call/shares), `strike`, `expiry`, `contracts`, `premium`, `status`, `close_date`, `close_price`, `notes`
+
+P&L calculation differs by type:
+- Options: `(premium - close_price) × 100 × contracts - commission × contracts × 2`
+- Shares: `(close_price - premium) × share_count` (no ×100 multiplier)
+
 ## Data flow
 
 ```
@@ -49,7 +77,10 @@ ORATS FTP → ingest_orats.py → options.duckdb (Mac only)
                                 ├── backtest_orats.py
                                 └── iv_history bootstrap → iv_history.csv
 
-yfinance (daily) → iv_history.py → iv_history.csv (appended daily)
-                 → screener.py    (live chains)
-                 → paper_trading.py (profit-take checks)
+yfinance (noon + 3 PM) → update_iv.py → iv_history.csv (overwrites today)
+yfinance (on demand)   → screener.py    (live chains)
+                       → paper_trading.py (profit-take checks)
+                       → real_report.py   (close ask prices, roll analysis)
+
+Google Sheets (10:30 AM) → gsheets.py → real_report.py
 ```

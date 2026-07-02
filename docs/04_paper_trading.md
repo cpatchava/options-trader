@@ -78,4 +78,6 @@ Commission: $0.65/contract/leg.
 | Monthly return | 0.5–2.5% |
 | Data quality issues | None |
 
-Live execution will use the **Schwab Individual Trader API** — the screener output maps directly to an options order ticket (`ticker`, `put_strike`, `expiry`, `contracts`).
+Live execution uses **Schwab** with manual order entry. The screener output maps directly to an options order ticket (`ticker`, `put_strike`, `expiry`, `contracts`). Executed trades are recorded in the Google Sheet; `real_report.py` reads from there and emails a daily portfolio snapshot at 10:30 AM ET.
+
+Paper trading continues to run in parallel with real trading for comparison.

@@ -177,26 +177,49 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
 
     # ── Held shares ────────────────────────────────────────────────────────
     if not open_shares.empty:
-        closed_assigned = closed[closed.get('close_type', '') == 'assigned'] if 'close_type' in closed.columns else closed.iloc[0:0]
+        import pandas as pd
         html += '<h3>HELD SHARES</h3>\n'
         html += ('<table><tr><th>Ticker</th><th>Sector</th><th>Shares</th>'
-                 '<th>Cost Basis</th><th>Put Premium</th><th>Net Basis</th>'
-                 '<th>Current Price</th><th>Net P&amp;L</th><th>Stop Level</th></tr>\n')
+                 '<th>Cost Basis</th><th>Put P&amp;L</th><th>CC P&amp;L</th>'
+                 '<th>Net Basis</th><th>Current Price</th>'
+                 '<th>Net P&amp;L</th><th>Stop Level</th></tr>\n')
         for _, row in open_shares.iterrows():
             tkr      = str(row.get('ticker', ''))
             basis    = float(row.get('strike', 0) or 0)
-            n_shares = int(row.get('contracts', 1) or 1)  # actual share count
+            n_shares = int(row.get('contracts', 1) or 1)
             sector   = TICKER_SECTORS.get(tkr, 'Other')
             stop     = round(basis * (1 - STOP_LOSS_PCT), 2)
 
-            # find premium from the matched assigned put
-            put_match = closed_assigned[closed_assigned['ticker'] == tkr] if not closed_assigned.empty else closed_assigned
-            put_pnl   = float(put_match['pnl'].iloc[0]) if not put_match.empty else 0.0
-            net_basis = basis - (put_pnl / n_shares) if n_shares else basis
+            # Sum P&L from all closed puts and calls on this ticker
+            closed_tkr = closed[closed['ticker'].astype(str) == tkr] if not closed.empty else pd.DataFrame()
+            if not closed_tkr.empty:
+                closed_type = closed_tkr['type'].astype(str).str.lower().str.strip()
+                put_pnl = float(closed_tkr[closed_type == 'put']['pnl'].sum())
+                closed_cc_pnl = float(closed_tkr[closed_type == 'call']['pnl'].sum())
+            else:
+                put_pnl = 0.0
+                closed_cc_pnl = 0.0
+
+            # Unrealized credit from open covered calls on this ticker
+            open_cc_unrealized = 0.0
+            if not open_calls.empty:
+                open_calls_tkr = open_calls[open_calls['ticker'].astype(str) == tkr]
+                for _, cc in open_calls_tkr.iterrows():
+                    cc_prem   = float(cc.get('premium', 0) or 0)
+                    cc_strike = float(cc.get('strike', 0) or 0)
+                    cc_n      = int(cc.get('contracts', 1) or 1)
+                    cc_exp    = cc.get('expiry', '')
+                    cc_exp_str = cc_exp.strftime('%Y-%m-%d') if hasattr(cc_exp, 'strftime') else str(cc_exp)[:10]
+                    cc_ask = _current_option_ask(tkr, cc_exp_str, cc_strike, 'call')
+                    if cc_ask is not None:
+                        open_cc_unrealized += (cc_prem - cc_ask) * 100 * cc_n
+
+            total_cc_pnl = closed_cc_pnl + open_cc_unrealized
+            net_basis    = basis - (put_pnl / n_shares) - (total_cc_pnl / n_shares) if n_shares else basis
 
             try:
                 cur_px  = float(yf.Ticker(tkr).fast_info.last_price)
-                net_pnl = (cur_px - basis) * n_shares + put_pnl
+                net_pnl = (cur_px - basis) * n_shares + put_pnl + total_cc_pnl
                 pnl_cls = 'green' if net_pnl >= 0 else 'red'
                 net_pnl_str = f'<span class="{pnl_cls}">${net_pnl:+,.0f}</span>'
                 px_str = f'${cur_px:.2f}'
@@ -204,11 +227,13 @@ def build_trader_report(trader: dict, candidates: list) -> tuple[str, str]:
                 net_pnl_str = '—'
                 px_str = 'N/A'
 
+            cc_cls = 'green' if total_cc_pnl >= 0 else 'red'
             html += (f'<tr><td><b>{tkr}</b></td>'
                      f'<td style="color:#7f8c8d;font-size:12px">{sector}</td>'
                      f'<td>{n_shares}</td>'
                      f'<td>${basis:.2f}</td>'
                      f'<td class="green">${put_pnl:+,.0f}</td>'
+                     f'<td class="{cc_cls}">${total_cc_pnl:+,.0f}</td>'
                      f'<td>${net_basis:.2f}</td>'
                      f'<td>{px_str}</td>'
                      f'<td>{net_pnl_str}</td>'
