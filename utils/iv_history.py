@@ -112,45 +112,33 @@ def _fetch_atm_iv(ticker: str, today: date) -> float | None:
 
 def update(tickers: list[str], verbose: bool = False) -> dict[str, float]:
     """
-    Fetch today's ATM put IV for each ticker and append to history.
-    Skips tickers already recorded today.
+    Fetch today's ATM put IV for each ticker and overwrite today's stored value.
+    Called multiple times per day — the latest reading always wins.
     Returns {ticker: iv} for all tickers with a reading today.
     """
     today = date.today()
     df = _load()
 
-    already: set[str] = set()
-    if not df.empty:
-        today_rows = df[df['date'].dt.date == today]
-        already = set(today_rows['ticker'].tolist())
+    if verbose:
+        print(f"  Fetching IV for {len(tickers)} tickers...", end='', flush=True)
 
-    new_rows = []
     fetched: dict[str, float] = {}
-
-    # Collect today's values from existing history
-    if not df.empty:
-        for t in already:
-            row = df[(df['date'].dt.date == today) & (df['ticker'] == t)]
-            if not row.empty:
-                fetched[t] = float(row['iv'].iloc[0])
-
-    need = [t for t in tickers if t not in already]
-    if verbose and need:
-        print(f"  Fetching IV for {len(need)} tickers...", end='', flush=True)
-
-    for ticker in need:
+    for ticker in tickers:
         iv = _fetch_atm_iv(ticker, today)
         if iv is not None:
-            new_rows.append({
-                'date': pd.Timestamp(today),
-                'ticker': ticker,
-                'iv': round(iv, 6),
-                'source': 'yfinance',
-            })
             fetched[ticker] = iv
 
-    if new_rows:
-        df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
+    if fetched:
+        # Drop any existing rows for today's tickers and replace with fresh values
+        mask = (df['date'].dt.date == today) & (df['ticker'].isin(fetched.keys()))
+        df = df[~mask].copy()
+        new_rows = pd.DataFrame([{
+            'date':   pd.Timestamp(today),
+            'ticker': tkr,
+            'iv':     round(iv, 6),
+            'source': 'yfinance',
+        } for tkr, iv in fetched.items()])
+        df = pd.concat([df, new_rows], ignore_index=True)
         _save(df)
 
     if verbose:
